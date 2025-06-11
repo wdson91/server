@@ -1,0 +1,106 @@
+[
+  {
+    "numero_fatura": "FR 1Y2025/3",
+    "data": "07/02/25",
+    "hora": "17:19",
+    "itens": [
+      {
+        "nome": "ENTRECOSTO",
+        "quantidade": 1,
+        "preco_unitario": 1.65,
+        "total": 1.65
+      },
+      {
+        "nome": "FRANGO CHURRASC",
+        "quantidade": 1,
+        "preco_unitario": 0.5,
+        "total": 0.5
+      },
+      {
+        "nome": "TOSCANA",
+        "quantidade": 1,
+        "preco_unitario": 5.0,
+        "total": 5.0
+      }
+    ],
+    "total": 7.15
+  },
+  {
+    "numero_fatura": "FR 1Y2025/4",
+    "data": "07/02/25",
+    "hora": "17:19",
+    "itens": [
+      {
+        "nome": "ENTRECOSTO",
+        "quantidade": 1,
+        "preco_unitario": 1.65,
+        "total": 1.65
+      },
+      {
+        "nome": "FRANGO CHURRASC",
+        "quantidade": 1,
+        "preco_unitario": 0.5,
+        "total": 0.5
+      },
+      {
+        "nome": "TOSCANA",
+        "quantidade": 1,
+        "preco_unitario": 5.0,
+        "total": 5.0
+      }
+    ],
+    "total": 7.15
+  },
+  {
+    "numero_fatura": "FR 1Y2025/7",
+    "data": "25/02/25",
+    "hora": "17:19",
+    "itens": [
+      {
+        "nome": "ENTRECOSTO",
+        "quantidade": 1,
+        "preco_unitario": 1.65,
+        "total": 1.65
+      },
+      {
+        "nome": "FRANGO CHURRASC",
+        "quantidade": 1,
+        "preco_unitario": 0.5,
+        "total": 0.5
+      },
+      {
+        "nome": "TOSCANA",
+        "quantidade": 1,
+        "preco_unitario": 5.0,
+        "total": 5.0
+      }
+    ],
+    "total": 7.15
+  },
+  {
+    "numero_fatura": "FR 1Y2025/9",
+    "data": "25/06/25",
+    "hora": "17:19",
+    "itens": [
+      {
+        "nome": "ENTRECOSTO",
+        "quantidade": 1,
+        "preco_unitario": 1.65,
+        "total": 1.65
+      },
+      {
+        "nome": "FRANGO CHURRASC",
+        "quantidade": 1,
+        "preco_unitario": 0.5,
+        "total": 0.5
+      },
+      {
+        "nome": "TOSCANA",
+        "quantidade": 1,
+        "preco_unitario": 5.0,
+        "total": 5.0
+      }
+    ],
+    "total": 7.15
+  }
+]
