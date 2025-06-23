@@ -53,17 +53,13 @@ def stats():
     result_today = supabase.table("faturas_fatura") \
         .select("*, itens:faturas_itemfatura(*)") \
         .eq('nif', nif) \
+        .eq("data", hoje.isoformat()) \
        .execute()
+    
     faturas_raw = result_today.data or []
     # ✅ Reforça o filtro manual em Python
     faturas = [f for f in faturas_raw if str(f.get("nif")) == nif]
     
-
-    if not faturas:
-        return jsonify({"message": "Nenhuma fatura encontrada para o NIF informado."}), 200
-    
-    
-
     # Estatísticas de hoje
     total_vendas = sum(float(f["total"]) for f in faturas)
     total_itens = sum(
