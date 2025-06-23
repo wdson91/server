@@ -1,149 +1,238 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 import re
-from datetime import datetime
+from datetime import date, datetime, time
 import os
 import json
+from flask_sqlalchemy import SQLAlchemy
+import requests
+from sqlalchemy import text
+# carrrega as variáveis de ambiente do arquivo .env
+from dotenv import load_dotenv
+from decorator import require_valid_token
+from supabaseUtil import get_supabase
+from collections import defaultdict
+import pytz
+from datetime import timedelta
+load_dotenv()
+
+
 
 app = Flask(__name__)
 
-DATA_FILE = "faturas.json"
-MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as file:
-            try:
-                return json.load(file)
-            except json.JSONDecodeError:
-                return []
-    return []
+supabase = get_supabase()
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
 
-def parse_fatura(text):
-    fatura = {
-        "numero_fatura": None,
-        "data": None,
-        "hora": None,
-        "itens": [],
-        "total": 0.0
+@app.route('/protegido')
+@require_valid_token
+def protegido():
+    return jsonify({"mensagem": "Acesso permitido!", "user_id": g.user_id})
+
+from getFaturas import get_faturas
+
+@app.route("/api/stats", methods=["GET"])
+@require_valid_token
+def relatorio():
+    return get_faturas()
+
+
+@app.route("/api/stats/today", methods=["GET"])
+@require_valid_token
+def stats():
+
+    nif = request.args.get("nif")
+    #nif = '514757876'
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    hoje = date.today()
+    tz = pytz.timezone("Europe/Lisbon")
+
+    
+    # Consulta bruta no Supabase
+    result_today = supabase.table("faturas_fatura") \
+        .select("*, itens:faturas_itemfatura(*)") \
+        .eq('nif', nif) \
+       .execute()
+    faturas_raw = result_today.data or []
+    # ✅ Reforça o filtro manual em Python
+    faturas = [f for f in faturas_raw if str(f.get("nif")) == nif]
+    
+
+    if not faturas:
+        return jsonify({"message": "Nenhuma fatura encontrada para o NIF informado."}), 200
+    
+    
+
+    # Estatísticas de hoje
+    total_vendas = sum(float(f["total"]) for f in faturas)
+    total_itens = sum(
+        item["quantidade"]
+        for f in faturas
+        for item in (f.get("itens") or [])
+    )
+
+    contagem_produtos = defaultdict(int)
+    for f in faturas:
+        for item in (f.get("itens") or []):
+            contagem_produtos[item["nome"]] += item["quantidade"]
+
+    produtos = sorted(
+        [{"produto": nome, "quantidade": qtd} for nome, qtd in contagem_produtos.items()],
+        key=lambda x: x["quantidade"],
+        reverse=True
+    )
+
+    vendas_por_hora_real = defaultdict(float)
+    for f in faturas:
+        hora_str = f.get("hora", "")
+        if hora_str:
+            hora_formatada = hora_str[:2] + ":00"
+            vendas_por_hora_real[hora_formatada] += float(f["total"])
+
+    horas_base = {"08:00", "12:00", "18:00"} | set(vendas_por_hora_real.keys())
+    vendas_horarias = [
+        {"hora": hora, "total": round(vendas_por_hora_real.get(hora, 0.0), 2)}
+        for hora in sorted(horas_base)
+    ]
+
+    # Marca o momento da atualização
+    agora = datetime.now(tz)
+    ultima_atualizacao = agora.strftime("%H:%M")
+
+    # Faturas últimos 7 dias até ontem
+    ontem = hoje - timedelta(days=1)
+    sete_dias_atras = hoje - timedelta(days=7)
+    result_7 = supabase.table("faturas_fatura") \
+        .select("data, total") \
+        .gte("data", sete_dias_atras.isoformat()) \
+        .lte("data", ontem.isoformat()) \
+        .execute()
+    faturas_7 = result_7.data or []
+
+    vendas_ultimos_7 = defaultdict(float)
+    for f in faturas_7:
+        vendas_ultimos_7[f["data"]] += float(f["total"])
+
+    vendas_por_dia_ultimos_7 = [
+        {"data": dia, "total": round(total, 2)}
+        for dia, total in sorted(vendas_ultimos_7.items())
+    ]
+    total_ultimos_7 = round(sum(float(f["total"]) for f in faturas_7), 2)
+
+    resultado = {
+        "dados": {
+            "total_vendas": round(total_vendas, 2),
+            "total_itens": total_itens,
+            "vendas_por_dia": [{"data": str(hoje), "total": round(total_vendas, 2)}],
+            "vendas_por_hora": vendas_horarias,
+            "vendas_por_produto": produtos,
+            "quantidade_faturas": len(faturas),
+            "filtro_data": str(hoje),
+            "ultima_atualizacao": ultima_atualizacao,
+            "ultimos_7_dias": vendas_por_dia_ultimos_7,
+            "total_ultimos_7_dias": total_ultimos_7,
+        }
     }
 
-    match = re.search(r"Fatura-Recibo nº\s*(FR\s*\S+)", text)
-    if match:
-        fatura["numero_fatura"] = match.group(1).strip()
+    return jsonify(resultado), 200
 
-    match = re.search(r"Data:\s*(\d{1,2})/(\d{1,2})/(\d{2})\s+(\d{2}):(\d{2})", text)
-    if match:
-        dia = match.group(1).zfill(2)
-        mes = match.group(2).zfill(2)
-        ano = match.group(3)
-        hora = match.group(4).zfill(2)
-        minuto = match.group(5).zfill(2)
-        fatura["data"] = f"{dia}/{mes}/{ano}"
-        fatura["hora"] = f"{hora}:{minuto}"
+@app.route("/api/stats/report", methods=["GET"])
+def faturas_agrupadas_view():
+    nif = request.args.get("nif")
+    if not nif:
+        return jsonify({"error": "NIF é obrigatório"}), 400
 
-    item_pattern = re.findall(r"(\d+)\s+x\s+(.+?)\s+@\s+([\d,\.]+).*?(\d{1,2}%)[\s\u20AC]*([\d,\.]+)", text)
-    for qty, name, unit_price, tax, total in item_pattern:
-        fatura["itens"].append({
-            "nome": name.strip(),
-            "quantidade": int(qty),
-            "preco_unitario": float(unit_price.replace(",", ".")),
-            "total": float(total.replace(",", "."))
+    hoje = date.today()
+    sete_dias_atras = hoje - timedelta(days=7)
+    ontem = hoje - timedelta(days=1)
+    tz = pytz.timezone("Europe/Lisbon")
+    agora = datetime.now(tz)
+
+    # Faturas de hoje com filtro por NIF
+    result_hoje = supabase.table("faturas_fatura") \
+        .select("*") \
+        .eq("data", hoje.isoformat()) \
+        .eq("nif", nif) \
+        .execute()
+
+    # Faturas dos últimos 7 dias (excluindo hoje)
+    result_7_dias = supabase.table("faturas_fatura") \
+        .select("*") \
+        .gte("data", sete_dias_atras.isoformat()) \
+        .lte("data", ontem.isoformat()) \
+        .eq("nif", nif) \
+        .execute()
+
+    faturas_hoje = result_hoje.data or []
+    faturas_7_dias = result_7_dias.data or []
+
+    if not faturas_hoje and not faturas_7_dias:
+        return jsonify({"message": "Nenhuma fatura encontrada para o NIF informado."}), 404
+
+    def agrupar_por_hora(faturas):
+        agrupado = defaultdict(lambda: {"volume": 0.0, "quantidade": 0})
+        for f in faturas:
+            hora_str = f.get("hora")
+            if not hora_str:
+                continue
+            hora_formatada = datetime.strptime(hora_str, "%H:%M:%S").strftime("%H:00")
+            agrupado[hora_formatada]["volume"] += float(f.get("total", 0))
+            agrupado[hora_formatada]["quantidade"] += 1
+        return agrupado
+
+    totais_hoje = agrupar_por_hora(faturas_hoje)
+    totais_7_dias = agrupar_por_hora(faturas_7_dias)
+
+    horas_com_dados = set(totais_hoje.keys()) | set(totais_7_dias.keys())
+    vendas_por_hora_formatado = []
+    for hora in sorted(horas_com_dados):
+        vendas_por_hora_formatado.append({
+            "hora": hora,
+            "faturas_hoje": totais_hoje.get(hora, {}).get("quantidade", 0),
+            "volume_hoje": round(totais_hoje.get(hora, {}).get("volume", 0), 2),
+            "faturas_7_dias": totais_7_dias.get(hora, {}).get("quantidade", 0),
+            "volume_7_dias": round(totais_7_dias.get(hora, {}).get("volume", 0), 2)
         })
 
-    match = re.search(r"Total\s+([\d,\.]+)", text)
-    if match:
-        fatura["total"] = float(match.group(1).replace(",", "."))
+    total_vendas_hoje = round(sum(float(f.get("total", 0)) for f in faturas_hoje), 2)
+    quantidade_faturas_hoje = len(faturas_hoje)
 
-    return fatura
+    # Vendas por dia - hoje
+    vendas_por_dia = [{
+        "data": hoje.strftime("%Y-%m-%d"),
+        "total": total_vendas_hoje
+    }]
 
-@app.route('/upload', methods=['POST'])
-def upload_fatura():
-    if 'file' not in request.files:
-        return jsonify({'erro': 'Nenhum arquivo enviado'}), 400
+    # Vendas últimos 7 dias (agrupar por data)
+    vendas_7_dias_dict = defaultdict(float)
+    for f in faturas_7_dias:
+        data_f = f["data"]
+        vendas_7_dias_dict[data_f] += float(f.get("total", 0))
 
-    arquivo = request.files['file']
-    if not arquivo.filename.endswith('.txt'):
-        return jsonify({'erro': 'Apenas arquivos .txt são aceitos'}), 400
+    ultimos_7_dias = [
+        {"data": data, "total": round(total, 2)}
+        for data, total in sorted(vendas_7_dias_dict.items())
+    ]
+    total_ultimos_7_dias = round(sum(v["total"] for v in ultimos_7_dias), 2)
 
-    arquivo.seek(0, 2)
-    tamanho = arquivo.tell()
-    arquivo.seek(0)
-    if tamanho > MAX_FILE_SIZE:
-        return jsonify({'erro': 'Arquivo muito grande. Máximo permitido: 2MB'}), 400
+    resposta = {
+        "dados": {
+            "total_vendas": total_vendas_hoje,
+            "quantidade_faturas": quantidade_faturas_hoje,
+            "vendas_por_dia": vendas_por_dia,
+            "vendas_por_hora": vendas_por_hora_formatado,
+            "filtro_data": hoje.strftime("%Y-%m-%d"),
+            "ultima_atualizacao": agora.strftime("%H:%M"),
+            "ultimos_7_dias": ultimos_7_dias,
+            "total_ultimos_7_dias": total_ultimos_7_dias,
+            "quantidade_faturas_7_dias": len(faturas_7_dias),
+        }
+    }
 
-    try:
-        texto = arquivo.read().decode('utf-8')
-    except UnicodeDecodeError:
-        return jsonify({'erro': 'Arquivo com codificação inválida. Use UTF-8'}), 400
+    return jsonify(resposta)
 
-    try:
-        dados = parse_fatura(texto)
-    except Exception as e:
-        return jsonify({'erro': f'Erro ao processar a fatura: {str(e)}'}), 400
 
-    campos_obrigatorios = ['numero_fatura', 'data', 'hora', 'itens', 'total']
-    for campo in campos_obrigatorios:
-        if campo not in dados or dados[campo] in [None, '', []]:
-            return jsonify({'erro': f'Campo obrigatório ausente ou vazio: {campo}'}), 400
-
-    # Carrega dados atuais do arquivo
-    faturas = load_data()
-
-    # Verifica se já existe fatura com mesmo número
-    if any(f['numero_fatura'] == dados['numero_fatura'] for f in faturas):
-        return jsonify({'erro': f'Fatura com número {dados["numero_fatura"]} já existe'}), 409
-
-    if not isinstance(dados['itens'], list) or len(dados['itens']) == 0:
-        return jsonify({'erro': 'A fatura deve conter ao menos um item válido'}), 400
-
-    for item in dados['itens']:
-        if not all(k in item for k in ['nome', 'quantidade', 'preco_unitario', 'total']):
-            return jsonify({'erro': 'Item da fatura com dados incompletos'}), 400
-
-    # Adiciona nova fatura e salva
-    faturas.append(dados)
-    save_data(faturas)
-
-    return jsonify({'mensagem': 'Fatura processada com sucesso', 'dados': dados}), 201
-
-@app.route('/faturas', methods=['GET'])
-def get_faturas():
-    faturas = load_data()
-    return jsonify(faturas)
-
-@app.route("/stats", methods=["GET"])
-def stats():
-    filtro_data = request.args.get("data")
-    faturas = load_data()
-
-    if filtro_data:
-        data = [f for f in faturas if f.get("data") == filtro_data]
-    else:
-        data = faturas
-
-    total_vendas = sum(f["total"] for f in data)
-    total_itens = sum(item["quantidade"] for f in data for item in f["itens"])
-
-    produtos = {}
-    for f in data:
-        for item in f["itens"]:
-            produtos[item["nome"]] = produtos.get(item["nome"], 0) + item["quantidade"]
-
-    return jsonify({
-        "total_vendas": round(total_vendas, 2),
-        "total_itens": total_itens,
-        "vendas_por_produto": produtos,
-        "quantidade_faturas": len(data),
-        "filtro_data": filtro_data
-    })
-
-@app.route("/")
-def index():
-    return app.send_static_file("index.html")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=8000, debug=True)
