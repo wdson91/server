@@ -134,6 +134,7 @@ def stats():
     return jsonify(resultado), 200
 
 @app.route("/api/stats/report", methods=["GET"])
+@require_valid_token
 def faturas_agrupadas_view():
     nif = request.args.get("nif")
     if not nif:
@@ -229,6 +230,59 @@ def faturas_agrupadas_view():
     return jsonify(resposta)
 
 
+@app.route("/api/products", methods=["GET"])
+@require_valid_token
+def mais_vendidos():
+    nif = request.args.get("nif")
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    hoje = date.today()
+
+    result = supabase.table("faturas_fatura") \
+        .select("*, itens:faturas_itemfatura(*)") \
+        .eq("nif", nif) \
+        .eq("data", hoje.isoformat()) \
+        .execute()
+    
+    faturas = result.data or []
+
+    contagem_produtos = defaultdict(lambda: {"quantidade": 0, "montante": 0.0})
+    total_itens = 0
+    total_montante = 0.0
+
+    for f in faturas:
+        for item in (f.get("itens") or []):
+            nome = item.get("nome")
+            qtd = item.get("quantidade", 0)
+            preco_unitario = float(item.get("preco_unitario", 0.0))
+
+            contagem_produtos[nome]["quantidade"] += qtd
+            contagem_produtos[nome]["montante"] += qtd * preco_unitario
+
+            total_itens += qtd
+            total_montante += qtd * preco_unitario
+
+    itens_formatados = sorted([
+        {
+            "produto": nome,
+            "quantidade": dados["quantidade"],
+            "montante": round(dados["montante"], 2),
+            "porcentagem_montante": round((dados["montante"] / total_montante) * 100, 2) if total_montante else 0.0
+        }
+        for nome, dados in contagem_produtos.items()
+    ], key=lambda x: x["montante"], reverse=True)
+
+    resultado = {
+        "dados": {
+            "data": str(hoje),
+            "total_itens": total_itens,
+            "total_montante": round(total_montante, 2),
+            "itens": itens_formatados
+        }
+    }
+
+    return jsonify(resultado), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=True)
