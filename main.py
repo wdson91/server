@@ -27,6 +27,12 @@ cache = Cache(app, config={
 supabase = get_supabase()
 
 
+def cache_key():
+    nif = request.args.get("nif", "")
+    rota = request.path  # ex: "/api/products"
+    return f"{rota}/{nif}"
+
+
 @app.route('/protegido')
 @require_valid_token
 def protegido():
@@ -42,7 +48,7 @@ def relatorio():
 
 @app.route("/api/stats/today", methods=["GET"])
 @require_valid_token
-@cache.cached( query_string=True)
+@cache.cached(timeout=180, key_prefix=cache_key)
 def stats():
 
     nif = request.args.get("nif")
@@ -140,7 +146,7 @@ def stats():
 
 @app.route("/api/stats/report", methods=["GET"])
 @require_valid_token
-@cache.cached( query_string=True)
+@cache.cached(timeout=180, key_prefix=cache_key)
 def faturas_agrupadas_view():
     nif = request.args.get("nif")
     if not nif:
@@ -238,7 +244,7 @@ def faturas_agrupadas_view():
 
 @app.route("/api/products", methods=["GET"])
 @require_valid_token
-@cache.cached( query_string=True)
+@cache.cached(timeout=180, key_prefix=cache_key)
 def mais_vendidos():
     nif = request.args.get("nif")
     if not nif or not nif.isdigit():
@@ -290,6 +296,49 @@ def mais_vendidos():
     }
 
     return jsonify(resultado), 200
+
+
+
+import redis
+
+# Usa mesma URL do seu Cache
+redis_client = redis.Redis.from_url("redis://localhost:6379/0")
+
+@app.route("/api/limparcache", methods=["DELETE"])
+def limpar_cache():
+    """
+    Limpa todo o cache do Redis.
+    """
+    try:
+        limpar_cache_por_nif(request.args.get("nif"))
+        return jsonify({"message": "Cache limpo com sucesso"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+def limpar_cache_por_nif(nif: str):
+    if not nif or not nif.isdigit():
+        raise ValueError("NIF inválido")
+    
+    padrao = f"*/{nif}"
+    cursor = 0
+    chaves_removidas = 0
+
+    while True:
+        cursor, chaves = redis_client.scan(cursor=cursor, match=padrao, count=100)
+        if chaves:
+            redis_client.delete(*chaves)
+            chaves_removidas += len(chaves)
+        if cursor == 0:
+            break
+    
+    return f"{chaves_removidas} chaves removidas para NIF {nif}"
+
+
+
+
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=True)
