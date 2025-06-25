@@ -21,7 +21,7 @@ app = Flask(__name__)
 
 cache = Cache(app, config={
     "CACHE_TYPE": "RedisCache",
-    "CACHE_REDIS_URL": "redis://localhost:6379/0",  # ajuste se necessário
+    "CACHE_REDIS_URL": "redis://redis:6379/0",  # ajuste se necessário
     "CACHE_DEFAULT_TIMEOUT": 180  # 5 minutos
 })
 supabase = get_supabase()
