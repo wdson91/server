@@ -14,12 +14,16 @@ from collections import defaultdict
 import pytz
 from datetime import timedelta
 load_dotenv()
-
+from flask_caching import Cache
 
 
 app = Flask(__name__)
 
-
+cache = Cache(app, config={
+    "CACHE_TYPE": "RedisCache",
+    "CACHE_REDIS_URL": "redis://localhost:6379/0",  # ajuste se necessário
+    "CACHE_DEFAULT_TIMEOUT": 180  # 5 minutos
+})
 supabase = get_supabase()
 
 
@@ -38,6 +42,7 @@ def relatorio():
 
 @app.route("/api/stats/today", methods=["GET"])
 @require_valid_token
+@cache.cached( query_string=True)
 def stats():
 
     nif = request.args.get("nif")
@@ -135,6 +140,7 @@ def stats():
 
 @app.route("/api/stats/report", methods=["GET"])
 @require_valid_token
+@cache.cached( query_string=True)
 def faturas_agrupadas_view():
     nif = request.args.get("nif")
     if not nif:
@@ -232,6 +238,7 @@ def faturas_agrupadas_view():
 
 @app.route("/api/products", methods=["GET"])
 @require_valid_token
+@cache.cached( query_string=True)
 def mais_vendidos():
     nif = request.args.get("nif")
     if not nif or not nif.isdigit():
