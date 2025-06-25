@@ -399,11 +399,8 @@ def resumo_stats():
         }
     }
 
-    lista_dados = [
-    {"nome": chave, "valor": valor["valor"], "variacao": valor["variacao"]}
-    for chave, valor in dados.items()
-]
-    return jsonify({"dados": lista_dados}), 200
+    
+    return jsonify({"dados": dados}), 200
 
 
 
