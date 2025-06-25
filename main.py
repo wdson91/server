@@ -338,6 +338,69 @@ def limpar_cache_por_nif(nif: str):
 
 
 
+@app.route("/api/stats/resumo", methods=["GET"])
+@require_valid_token
+@cache.cached(timeout=180, key_prefix=cache_key)
+def resumo_stats():
+    nif = request.args.get("nif")
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    hoje = date.today()
+    sete_dias_atras = hoje - timedelta(days=7)
+
+    # 🔹 Faturas de hoje
+    result_hoje = supabase.table("faturas_fatura") \
+        .select("*, itens:faturas_itemfatura(*)") \
+        .eq("data", hoje.isoformat()) \
+        .eq("nif", nif) \
+        .execute()
+    faturas_hoje = result_hoje.data or []
+
+    # 🔹 Faturas de 7 dias atrás
+    result_antigo = supabase.table("faturas_fatura") \
+        .select("*, itens:faturas_itemfatura(*)") \
+        .eq("data", sete_dias_atras.isoformat()) \
+        .eq("nif", nif) \
+        .execute()
+    faturas_antigas = result_antigo.data or []
+
+    def calcular_stats(faturas):
+        total = sum(float(f["total"]) for f in faturas)
+        recibos = len(faturas)
+        itens = sum(item["quantidade"] for f in faturas for item in (f.get("itens") or []))
+        ticket = round(total / recibos, 2) if recibos else 0.0
+        return total, recibos, itens, ticket
+
+    total_hoje, recibos_hoje, itens_hoje, ticket_hoje = calcular_stats(faturas_hoje)
+    total_antigo, recibos_antigo, itens_antigo, ticket_antigo = calcular_stats(faturas_antigas)
+
+    def calcular_percentual(atual, anterior):
+        if anterior == 0:
+            return 100.0 if atual > 0 else 0.0
+        return round(((atual - anterior) / anterior) * 100, 1)
+
+    dados = {
+        "total_vendas": {
+            "valor": round(total_hoje, 2),
+            "variacao": calcular_percentual(total_hoje, total_antigo)
+        },
+        "numero_recibos": {
+            "valor": recibos_hoje,
+            "variacao": calcular_percentual(recibos_hoje, recibos_antigo)
+        },
+        "itens_vendidos": {
+            "valor": itens_hoje,
+            "variacao": calcular_percentual(itens_hoje, itens_antigo)
+        },
+        "ticket_medio": {
+            "valor": round(ticket_hoje, 2),
+            "variacao": calcular_percentual(ticket_hoje, ticket_antigo)
+        }
+    }
+
+    return jsonify({"dados": dados}), 200
+
 
 
 if __name__ == '__main__':
