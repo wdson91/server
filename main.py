@@ -342,9 +342,10 @@ def format_variacao(valor: float) -> dict:
     variacao_formatada = f"{sinal}{abs(round(valor, 1))}%"
     return {"variacao": variacao_formatada, "cor": cor}
 
+
 @app.route("/api/stats/resumo", methods=["GET"])
-@require_valid_token
 @cache.cached(timeout=180, key_prefix=cache_key)
+@require_valid_token
 def resumo_stats():
     nif = request.args.get("nif")
     if not nif or not nif.isdigit():
@@ -361,13 +362,19 @@ def resumo_stats():
         .execute()
     faturas_hoje = result_hoje.data or []
 
-    # 🔹 Faturas de 7 dias atrás
-    result_antigo = supabase.table("faturas_fatura") \
-        .select("*, itens:faturas_itemfatura(*)") \
-        .eq("data", sete_dias_atras.isoformat()) \
-        .eq("nif", nif) \
-        .execute()
-    faturas_antigas = result_antigo.data or []
+    # 🔹 Faturas do mesmo dia da semana nas últimas 4 semanas
+    dia_semana = hoje.weekday()  # 0 = segunda, 6 = domingo
+    datas_semanais = [hoje - timedelta(weeks=i) for i in range(1, 5)]
+    datas_mesmo_dia = [d for d in datas_semanais if d.weekday() == dia_semana]
+
+    faturas_semana = []
+    for d in datas_mesmo_dia:
+        res = supabase.table("faturas_fatura") \
+            .select("*, itens:faturas_itemfatura(*)") \
+            .eq("data", d.isoformat()) \
+            .eq("nif", nif) \
+            .execute()
+        faturas_semana.extend(res.data or [])
 
     def calcular_stats(faturas):
         total = sum(float(f["total"]) for f in faturas)
@@ -377,7 +384,7 @@ def resumo_stats():
         return total, recibos, itens, ticket
 
     total_hoje, recibos_hoje, itens_hoje, ticket_hoje = calcular_stats(faturas_hoje)
-    total_antigo, recibos_antigo, itens_antigo, ticket_antigo = calcular_stats(faturas_antigas)
+    total_antigo, recibos_antigo, itens_antigo, ticket_antigo = calcular_stats(faturas_semana)
 
     def format_variacao(atual, anterior):
         if anterior == 0:
@@ -386,18 +393,69 @@ def resumo_stats():
             variacao = ((atual - anterior) / anterior) * 100
 
         cor = "#28a745" if variacao >= 0 else "#dc3545"
-        sinal = "+" if variacao >= 0 else "-"
+        sinal = "+" if variacao >= 0 else ""
         return {
             "valor": round(atual, 2) if isinstance(atual, float) else atual,
-            "variacao": f"{sinal}{abs(round(variacao, 1))}%",
+            "variacao": f"{sinal}{round(variacao, 1)}%",
             "cor": cor
         }
-  
+
+    # 🔹 Agrupar por hora usando o campo 'hora'
+    def agrupar_por_hora(faturas):
+        horas = defaultdict(float)
+        for f in faturas:
+            if 'hora' in f and f['hora']:
+                try:
+                    # Formata como "HH:00" (pega só a hora)
+                    hora = f['hora'].split(':')[0] + ':00'
+                    horas[hora] += float(f.get("total", 0))
+                except (ValueError, IndexError):
+                    continue
+        return horas
+
+    vendas_hoje_por_hora = agrupar_por_hora(faturas_hoje)
+    vendas_semana_por_hora = agrupar_por_hora(faturas_semana)
+
+    # 🔹 Preparar dados para todas as horas do dia
+    comparativo_por_hora = []
+    media_por_hora = []
+    
+    horas_do_dia = [f"{h:02d}:00" for h in range(24)]  # 00:00 até 23:00
+    
+    for hora in horas_do_dia:
+        # Dados de hoje
+        total_hoje = vendas_hoje_por_hora.get(hora, 0.0)
+        
+        # Calcula média semanal (soma de todas as semanas / número de semanas)
+        total_semana = sum(
+            vendas_semana_por_hora.get(hora, 0.0) 
+            for _ in datas_mesmo_dia
+        )
+        media_semanal = total_semana / len(datas_mesmo_dia) if datas_mesmo_dia else 0.0
+        
+        # Formata variação
+        variacao = format_variacao(total_hoje, media_semanal)
+        
+        comparativo_por_hora.append({
+            "hora": hora,
+            "hoje": round(total_hoje, 2),
+            "media_semanal": round(media_semanal, 2),
+            "variacao": variacao["variacao"],
+            "cor": variacao["cor"]
+        })
+
+        media_por_hora.append({
+            "hora": hora,
+            "media_semanal": round(media_semanal, 2)
+        })
+
     dados = {
         "total_vendas": format_variacao(total_hoje, total_antigo),
         "numero_recibos": format_variacao(recibos_hoje, recibos_antigo),
         "itens_vendidos": format_variacao(itens_hoje, itens_antigo),
-        "ticket_medio": format_variacao(ticket_hoje, ticket_antigo)
+        "ticket_medio": format_variacao(ticket_hoje, ticket_antigo),
+        "comparativo_por_hora": comparativo_por_hora,
+        "media_por_hora": media_por_hora
     }
 
     return jsonify({"dados": dados}), 200
