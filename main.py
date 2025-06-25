@@ -406,9 +406,10 @@ def resumo_stats():
         for f in faturas:
             if 'hora' in f and f['hora']:
                 try:
-                    # Formata como "HH:00" (pega só a hora)
-                    hora = f['hora'].split(':')[0] + ':00'
-                    horas[hora] += float(f.get("total", 0))
+                    # Extrai apenas a hora como número (ex: "08:30" -> 8.5)
+                    horas_parts = f['hora'].split(':')
+                    hora_num = int(horas_parts[0])  # Só a hora cheia
+                    horas[hora_num] += float(f.get("total", 0))
                 except (ValueError, IndexError):
                     continue
         return horas
@@ -416,19 +417,20 @@ def resumo_stats():
     vendas_hoje_por_hora = agrupar_por_hora(faturas_hoje)
     vendas_semana_por_hora = agrupar_por_hora(faturas_semana)
 
-    # 🔹 Preparar dados para todas as horas do dia
-    comparativo_por_hora = []
-    media_por_hora = []
+    # 🔹 Preparar dados numéricos para o gráfico
+    comparativo_por_hora_numerico = []
+    horas_base = [h + 0.0 for h in range(24)]  # [0.0, 1.0, ..., 23.0]
     
-    horas_do_dia = [f"{h:02d}:00" for h in range(24)]  # 00:00 até 23:00
-    
-    for hora in horas_do_dia:
-        # Dados de hoje
-        total_hoje = vendas_hoje_por_hora.get(hora, 0.0)
+    for hora_num in horas_base:
+        # Formata a hora para exibição ("HH:00")
+        hora_str = f"{int(hora_num):02d}:00"
         
-        # Calcula média semanal (soma de todas as semanas / número de semanas)
+        # Dados de hoje
+        total_hoje = vendas_hoje_por_hora.get(hora_num, 0.0)
+        
+        # Calcula média semanal
         total_semana = sum(
-            vendas_semana_por_hora.get(hora, 0.0) 
+            vendas_semana_por_hora.get(hora_num, 0.0) 
             for _ in datas_mesmo_dia
         )
         media_semanal = total_semana / len(datas_mesmo_dia) if datas_mesmo_dia else 0.0
@@ -436,17 +438,13 @@ def resumo_stats():
         # Formata variação
         variacao = format_variacao(total_hoje, media_semanal)
         
-        comparativo_por_hora.append({
-            "hora": hora,
+        comparativo_por_hora_numerico.append({
+            "hora": hora_str,  # Mantém como string para exibição
+            "hora_num": hora_num,  # Valor numérico para o gráfico
             "hoje": round(total_hoje, 2),
             "media_semanal": round(media_semanal, 2),
             "variacao": variacao["variacao"],
             "cor": variacao["cor"]
-        })
-
-        media_por_hora.append({
-            "hora": hora,
-            "media_semanal": round(media_semanal, 2)
         })
 
     dados = {
@@ -454,8 +452,12 @@ def resumo_stats():
         "numero_recibos": format_variacao(recibos_hoje, recibos_antigo),
         "itens_vendidos": format_variacao(itens_hoje, itens_antigo),
         "ticket_medio": format_variacao(ticket_hoje, ticket_antigo),
-        "comparativo_por_hora": comparativo_por_hora,
-        "media_por_hora": media_por_hora
+        "comparativo_por_hora": comparativo_por_hora_numerico,  # Agora com valores numéricos
+        "media_por_hora": [{
+            "hora": f"{int(hora_num):02d}:00",
+            "hora_num": hora_num,
+            "media_semanal": round(vendas_semana_por_hora.get(hora_num, 0.0), 2)
+        } for hora_num in horas_base]
     }
 
     return jsonify({"dados": dados}), 200
