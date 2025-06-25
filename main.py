@@ -336,7 +336,11 @@ def limpar_cache_por_nif(nif: str):
     return f"{chaves_removidas} chaves removidas para NIF {nif}"
 
 
-
+def format_variacao(valor: float) -> dict:
+    sinal = "+" if valor >= 0 else "-"
+    cor = "#28a745" if valor >= 0 else "#dc3545"  # verde vs vermelho
+    variacao_formatada = f"{sinal}{abs(round(valor, 1))}%"
+    return {"variacao": variacao_formatada, "cor": cor}
 
 @app.route("/api/stats/resumo", methods=["GET"])
 @require_valid_token
@@ -375,32 +379,29 @@ def resumo_stats():
     total_hoje, recibos_hoje, itens_hoje, ticket_hoje = calcular_stats(faturas_hoje)
     total_antigo, recibos_antigo, itens_antigo, ticket_antigo = calcular_stats(faturas_antigas)
 
-    def calcular_percentual(atual, anterior):
+    def format_variacao(atual, anterior):
         if anterior == 0:
-            return 100.0 if atual > 0 else 0.0
-        return round(((atual - anterior) / anterior) * 100, 1)
+            variacao = 100.0 if atual > 0 else 0.0
+        else:
+            variacao = ((atual - anterior) / anterior) * 100
 
-    dados = {
-        "total_vendas": {
-            "valor": round(total_hoje, 2),
-            "variacao": calcular_percentual(total_hoje, total_antigo)
-        },
-        "numero_recibos": {
-            "valor": recibos_hoje,
-            "variacao": calcular_percentual(recibos_hoje, recibos_antigo)
-        },
-        "itens_vendidos": {
-            "valor": itens_hoje,
-            "variacao": calcular_percentual(itens_hoje, itens_antigo)
-        },
-        "ticket_medio": {
-            "valor": round(ticket_hoje, 2),
-            "variacao": calcular_percentual(ticket_hoje, ticket_antigo)
+        cor = "#28a745" if variacao >= 0 else "#dc3545"
+        sinal = "+" if variacao >= 0 else "-"
+        return {
+            "valor": round(atual, 2) if isinstance(atual, float) else atual,
+            "variacao": f"{sinal}{abs(round(variacao, 1))}%",
+            "cor": cor
         }
+  
+    dados = {
+        "total_vendas": format_variacao(total_hoje, total_antigo),
+        "numero_recibos": format_variacao(recibos_hoje, recibos_antigo),
+        "itens_vendidos": format_variacao(itens_hoje, itens_antigo),
+        "ticket_medio": format_variacao(ticket_hoje, ticket_antigo)
     }
 
-    
     return jsonify({"dados": dados}), 200
+
 
 
 
