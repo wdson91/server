@@ -103,6 +103,25 @@ from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 from collections import defaultdict
 
+
+def parse_periodo(periodo):
+    periodos = {
+        0: "Hoje",
+        1: "Ontem",
+        2: "Semana",
+        3: "Mês",
+        4: "Trimestre",
+        5: "Ano"
+    }
+    
+    periodo = periodos.get(periodo)
+    if periodo is None:
+        raise ValueError("Período inválido. Use: 0 a 5")
+    
+    return periodo# mapping de periodos
+    
+
+
 def get_periodo_datas(periodo):
     hoje = date.today()
 

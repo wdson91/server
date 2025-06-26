@@ -53,8 +53,8 @@ def relatorio():
 
 
 @app.route("/api/stats/today", methods=["GET"])
-@cache.cached(timeout=180, key_prefix=cache_key)
 @require_valid_token
+@cache.cached(timeout=180, key_prefix=cache_key)
 def stats():
 
     nif = request.args.get("nif")
@@ -151,8 +151,8 @@ def stats():
     return jsonify(resultado), 200
 
 @app.route("/api/stats/report", methods=["GET"])
-@cache.cached(timeout=180, key_prefix=cache_key)
 @require_valid_token
+@cache.cached(timeout=180, key_prefix=cache_key)
 def faturas_agrupadas_view():
     nif = request.args.get("nif")
     if not nif:
@@ -249,22 +249,25 @@ def faturas_agrupadas_view():
 
 
 @app.route("/api/products", methods=["GET"])
-@cache.cached(timeout=180, key_prefix=cache_key)
 @require_valid_token
+@cache.cached(timeout=180, key_prefix=cache_key)
+
 def mais_vendidos():
     nif = request.args.get("nif")
-    if not nif or not nif.isdigit():
+    if not is_valid_nif(nif):
         return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
 
-    hoje = date.today()
+    try:
+        periodo = int(request.args.get("periodo", 0))  # 0 = hoje, 1 = ontem, etc.
+    except ValueError:
+        return jsonify({"error": "Período inválido. Deve ser um número inteiro de 0 a 5."}), 400
 
-    result = supabase.table("faturas_fatura") \
-        .select("*, itens:faturas_itemfatura(*)") \
-        .eq("nif", nif) \
-        .eq("data", hoje.isoformat()) \
-        .execute()
-    
-    faturas = result.data or []
+    try:
+        data_inicio, data_fim, _, _ = get_periodo_datas(periodo)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    faturas = buscar_faturas_periodo(nif, data_inicio, data_fim)
 
     contagem_produtos = defaultdict(lambda: {"quantidade": 0, "montante": 0.0})
     total_itens = 0
@@ -293,17 +296,17 @@ def mais_vendidos():
     ], key=lambda x: x["montante"], reverse=True)
 
     resultado = {
-        "dados": {
-            "data": str(hoje),
+        
+            "periodo": parse_periodo(periodo),
+            "data_inicio": str(data_inicio),
+            "data_fim": str(data_fim),
             "total_itens": total_itens,
             "total_montante": round(total_montante, 2),
             "itens": itens_formatados
-        }
+        
     }
 
     return jsonify(resultado), 200
-
-
 
 
 @app.route("/api/limparcache", methods=["DELETE"])
@@ -348,20 +351,13 @@ def resumo_stats():
 
     comparativo_por_hora = gerar_comparativo_por_hora(vendas_atual_por_hora, vendas_ant_por_hora)
 
-    # mapping de periodos
-    periodos = {
-        0: "Hoje",
-        1: "Ontem",
-        2: "Semana",
-        3: "Mês",
-        4: "Trimestre",
-        5: "Ano"
-    }
+    
 
     dados = {
-        "periodo": periodos.get(periodo, "Personalizado"),
+        "periodo": parse_periodo(periodo),
         "total_vendas": calcular_variacao_dados(total_atual, total_ant),
         "numero_recibos": calcular_variacao_dados(recibos_atual, recibos_ant),
+        
         "itens_vendidos": calcular_variacao_dados(itens_atual, itens_ant),
         "ticket_medio": calcular_variacao_dados(ticket_atual, ticket_ant),
         "comparativo_por_hora": comparativo_por_hora
