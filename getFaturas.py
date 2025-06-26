@@ -1,7 +1,7 @@
 from flask import request, jsonify, g
 from datetime import date, timedelta, datetime
 from collections import defaultdict
-from supabaseUtil import get_supabase
+from utils.supabaseUtil import get_supabase
 
 
 supabase = get_supabase()

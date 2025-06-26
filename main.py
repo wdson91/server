@@ -9,7 +9,7 @@ from sqlalchemy import text
 # carrrega as variáveis de ambiente do arquivo .env
 from dotenv import load_dotenv
 from decorator import require_valid_token
-from supabaseUtil import get_supabase
+from utils.supabaseUtil import get_supabase
 from collections import defaultdict
 import pytz
 from datetime import timedelta
@@ -342,125 +342,40 @@ def format_variacao(valor: float) -> dict:
     variacao_formatada = f"{sinal}{abs(round(valor, 1))}%"
     return {"variacao": variacao_formatada, "cor": cor}
 
+from utils.utils import *
 
 @app.route("/api/stats/resumo", methods=["GET"])
 @cache.cached(timeout=180, key_prefix=cache_key)
-@require_valid_token
 def resumo_stats():
     nif = request.args.get("nif")
-    if not nif or not nif.isdigit():
+    if not is_valid_nif(nif):
         return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
 
     hoje = date.today()
-    sete_dias_atras = hoje - timedelta(days=7)
+    ontem = hoje - timedelta(days=1)
 
-    # 🔹 Faturas de hoje
-    result_hoje = supabase.table("faturas_fatura") \
-        .select("*, itens:faturas_itemfatura(*)") \
-        .eq("data", hoje.isoformat()) \
-        .eq("nif", nif) \
-        .execute()
-    faturas_hoje = result_hoje.data or []
-
-    # 🔹 Faturas do mesmo dia da semana nas últimas 4 semanas
-    dia_semana = hoje.weekday()  # 0 = segunda, 6 = domingo
-    datas_semanais = [hoje - timedelta(weeks=i) for i in range(1, 5)]
-    datas_mesmo_dia = [d for d in datas_semanais if d.weekday() == dia_semana]
-
-    faturas_semana = []
-    for d in datas_mesmo_dia:
-        res = supabase.table("faturas_fatura") \
-            .select("*, itens:faturas_itemfatura(*)") \
-            .eq("data", d.isoformat()) \
-            .eq("nif", nif) \
-            .execute()
-        faturas_semana.extend(res.data or [])
-
-    def calcular_stats(faturas):
-        total = sum(float(f["total"]) for f in faturas)
-        recibos = len(faturas)
-        itens = sum(item["quantidade"] for f in faturas for item in (f.get("itens") or []))
-        ticket = round(total / recibos, 2) if recibos else 0.0
-        return total, recibos, itens, ticket
+    faturas_hoje = buscar_faturas_por_data(nif, hoje)
+    faturas_ontem = buscar_faturas_por_data(nif, ontem)
 
     total_hoje, recibos_hoje, itens_hoje, ticket_hoje = calcular_stats(faturas_hoje)
-    total_antigo, recibos_antigo, itens_antigo, ticket_antigo = calcular_stats(faturas_semana)
-
-    def format_variacao(atual, anterior):
-        if anterior == 0:
-            variacao = 100.0 if atual > 0 else 0.0
-        else:
-            variacao = ((atual - anterior) / anterior) * 100
-
-        cor = "#28a745" if variacao >= 0 else "#dc3545"
-        sinal = "+" if variacao >= 0 else ""
-        return {
-            "valor": round(atual, 2) if isinstance(atual, float) else atual,
-            "variacao": f"{sinal}{round(variacao, 1)}%",
-            "cor": cor
-        }
-
-    # 🔹 Agrupar por hora usando o campo 'hora'
-    def agrupar_por_hora(faturas):
-        horas = defaultdict(float)
-        for f in faturas:
-            if 'hora' in f and f['hora']:
-                try:
-                    # Extrai apenas a hora como número (ex: "08:30" -> 8.5)
-                    horas_parts = f['hora'].split(':')
-                    hora_num = int(horas_parts[0])  # Só a hora cheia
-                    horas[hora_num] += float(f.get("total", 0))
-                except (ValueError, IndexError):
-                    continue
-        return horas
+    total_ontem, recibos_ontem, itens_ontem, ticket_ontem = calcular_stats(faturas_ontem)
 
     vendas_hoje_por_hora = agrupar_por_hora(faturas_hoje)
-    vendas_semana_por_hora = agrupar_por_hora(faturas_semana)
+    vendas_ontem_por_hora = agrupar_por_hora(faturas_ontem)
 
-    # 🔹 Preparar dados numéricos para o gráfico
-    comparativo_por_hora_numerico = []
-    horas_base = [h + 0.0 for h in range(24)]  # [0.0, 1.0, ..., 23.0]
-    
-    for hora_num in horas_base:
-        # Formata a hora para exibição ("HH:00")
-        hora_str = f"{int(hora_num):02d}:00"
-        
-        # Dados de hoje
-        total_hoje = vendas_hoje_por_hora.get(hora_num, 0.0)
-        
-        # Calcula média semanal
-        total_semana = sum(
-            vendas_semana_por_hora.get(hora_num, 0.0) 
-            for _ in datas_mesmo_dia
-        )
-        media_semanal = total_semana / len(datas_mesmo_dia) if datas_mesmo_dia else 0.0
-        
-        # Formata variação
-        variacao = format_variacao(total_hoje, media_semanal)
-        
-        comparativo_por_hora_numerico.append({
-            "hora": hora_str,  # Mantém como string para exibição
-            "hora_num": hora_num,  # Valor numérico para o gráfico
-            "hoje": round(total_hoje, 2),
-            "media_semanal": round(media_semanal, 2),
-            "variacao": variacao["variacao"],
-            "cor": variacao["cor"]
-        })
+    comparativo_por_hora_numerico = gerar_comparativo_por_hora(vendas_hoje_por_hora, vendas_ontem_por_hora)
 
     dados = {
-        "total_vendas": format_variacao(total_hoje, total_antigo),
-        "numero_recibos": format_variacao(recibos_hoje, recibos_antigo),
-        "itens_vendidos": format_variacao(itens_hoje, itens_antigo),
-        "ticket_medio": format_variacao(ticket_hoje, ticket_antigo),
-        "comparativo_por_hora": comparativo_por_hora_numerico,  # Agora com valores numéricos
-        "media_por_hora": [{
-            "hora": f"{int(hora_num):02d}:00",
-            "hora_num": hora_num,
-            "media_semanal": round(vendas_semana_por_hora.get(hora_num, 0.0), 2)
-        } for hora_num in horas_base]
+        "total_vendas": calcular_variacao_dados(total_hoje, total_ontem),
+        "numero_recibos": calcular_variacao_dados(recibos_hoje, recibos_ontem),
+        "itens_vendidos": calcular_variacao_dados(itens_hoje, itens_ontem),
+        "ticket_medio": calcular_variacao_dados(ticket_hoje, ticket_ontem),
+        "comparativo_por_hora": comparativo_por_hora_numerico
     }
 
     return jsonify({"dados": dados}), 200
+
+
 
 
 
