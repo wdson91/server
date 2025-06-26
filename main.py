@@ -27,6 +27,8 @@ cache = Cache(app, config={
 })
 supabase = get_supabase()
 
+
+
 def precache_essenciais(nif, token):
     rotas = [
         f"http://localhost:8000/api/stats?nif={nif}",
@@ -66,6 +68,10 @@ from getFaturas import get_faturas
 def relatorio():
     return get_faturas()
 
+def marcar_atualizacao_cache(nif):
+    tz = pytz.timezone("Europe/Lisbon")
+    agora = datetime.now(tz).strftime("%d-%m %H:%M")
+    cache.set(f"ultima_atualizacao:{nif}", agora)
 
 @app.route("/api/stats/today", methods=["GET"])
 @require_valid_token
@@ -259,6 +265,7 @@ def faturas_agrupadas_view():
             "quantidade_faturas_7_dias": len(faturas_7_dias),
         }
     }
+    marcar_atualizacao_cache(nif)
 
     return jsonify(resposta)
 
@@ -319,6 +326,7 @@ def mais_vendidos():
             "itens": itens_formatados
         
     }
+    marcar_atualizacao_cache(nif)
 
     return jsonify(resultado), 200
 
@@ -352,9 +360,10 @@ def ultima_atualizacao():
     nif = request.args.get("nif")
     if not nif:
         return jsonify({"error": "NIF é obrigatório"}), 400
-
+    agora = datetime.now(pytz.timezone("Europe/Lisbon")).strftime("%d-%m %H:%M")
     ultima = cache.get(f"ultima_atualizacao:{nif}")
-    return jsonify({"nif": nif, "ultima_atualizacao": ultima or "Não disponível"}), 200
+    
+    return jsonify({"nif": nif, "ultima_atualizacao": ultima or agora}), 200
 
 
 from utils.utils import *
@@ -396,6 +405,7 @@ def resumo_stats():
         "ticket_medio": calcular_variacao_dados(ticket_atual, ticket_ant),
         "comparativo_por_hora": comparativo_por_hora
     }
+    marcar_atualizacao_cache(nif)
 
     return jsonify({"dados": dados}), 200
 
