@@ -44,7 +44,7 @@ def precache_essenciais(nif, token):
 
     # Armazena o horário da atualização no Redis
     tz = pytz.timezone("Europe/Lisbon")
-    agora = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    agora = datetime.now(tz).strftime("%d-%m %H:%M")
     cache.set(f"ultima_atualizacao:{nif}", agora)
 
 def cache_key():
