@@ -299,10 +299,6 @@ def mais_vendidos():
 
 
 
-import redis
-
-# Usa mesma URL do seu Cache
-redis_client = redis.Redis.from_url("redis://localhost:6379/0")
 
 @app.route("/api/limparcache", methods=["DELETE"])
 def limpar_cache():
@@ -317,30 +313,6 @@ def limpar_cache():
 
 
 
-def limpar_cache_por_nif(nif: str):
-    if not nif or not nif.isdigit():
-        raise ValueError("NIF inválido")
-    
-    padrao = f"*/{nif}"
-    cursor = 0
-    chaves_removidas = 0
-
-    while True:
-        cursor, chaves = redis_client.scan(cursor=cursor, match=padrao, count=100)
-        if chaves:
-            redis_client.delete(*chaves)
-            chaves_removidas += len(chaves)
-        if cursor == 0:
-            break
-    
-    return f"{chaves_removidas} chaves removidas para NIF {nif}"
-
-
-def format_variacao(valor: float) -> dict:
-    sinal = "+" if valor >= 0 else "-"
-    cor = "#28a745" if valor >= 0 else "#dc3545"  # verde vs vermelho
-    variacao_formatada = f"{sinal}{abs(round(valor, 1))}%"
-    return {"variacao": variacao_formatada, "cor": cor}
 
 from utils.utils import *
 
