@@ -29,8 +29,9 @@ supabase = get_supabase()
 
 def cache_key():
     nif = request.args.get("nif", "")
+    periodo = int(request.args.get("periodo", 0))
     rota = request.path  # ex: "/api/products"
-    return f"{rota}/{nif}"
+    return f"{rota}/{nif}/{periodo}"
 
 
 @app.route('/protegido')
@@ -317,8 +318,8 @@ def limpar_cache():
 from utils.utils import *
 
 @app.route("/api/stats/resumo", methods=["GET"])
-@cache.cached(timeout=180, key_prefix=cache_key)
 @require_valid_token
+@cache.cached(timeout=180, key_prefix=cache_key)
 def resumo_stats():
     nif = request.args.get("nif")
     periodo = int(request.args.get("periodo", 0))
