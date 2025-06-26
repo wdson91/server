@@ -321,33 +321,47 @@ from utils.utils import *
 @require_valid_token
 def resumo_stats():
     nif = request.args.get("nif")
+    periodo = int(request.args.get("periodo", 0))
+    print(f"Periodo: {periodo}")
     if not is_valid_nif(nif):
         return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
 
-    hoje = date.today()
-    ontem = hoje - timedelta(days=1)
+    try:
+        data_inicio, data_fim, data_inicio_anterior, data_fim_anterior = get_periodo_datas(periodo)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
-    faturas_hoje = buscar_faturas_por_data(nif, hoje)
-    faturas_ontem = buscar_faturas_por_data(nif, ontem)
+    faturas_atual = buscar_faturas_periodo(nif, data_inicio, data_fim)
+    faturas_anterior = buscar_faturas_periodo(nif, data_inicio_anterior, data_fim_anterior)
 
-    total_hoje, recibos_hoje, itens_hoje, ticket_hoje = calcular_stats(faturas_hoje)
-    total_ontem, recibos_ontem, itens_ontem, ticket_ontem = calcular_stats(faturas_ontem)
+    total_atual, recibos_atual, itens_atual, ticket_atual = calcular_stats(faturas_atual)
+    total_ant, recibos_ant, itens_ant, ticket_ant = calcular_stats(faturas_anterior)
 
-    vendas_hoje_por_hora = agrupar_por_hora(faturas_hoje)
-    vendas_ontem_por_hora = agrupar_por_hora(faturas_ontem)
+    vendas_atual_por_hora = agrupar_por_hora(faturas_atual)
+    vendas_ant_por_hora = agrupar_por_hora(faturas_anterior)
 
-    comparativo_por_hora_numerico = gerar_comparativo_por_hora(vendas_hoje_por_hora, vendas_ontem_por_hora)
+    comparativo_por_hora = gerar_comparativo_por_hora(vendas_atual_por_hora, vendas_ant_por_hora)
+
+    # mapping de periodos
+    periodos = {
+        0: "Hoje",
+        1: "Ontem",
+        2: "Semana",
+        3: "Mês",
+        4: "Trimestre",
+        5: "Ano"
+    }
 
     dados = {
-        "total_vendas": calcular_variacao_dados(total_hoje, total_ontem),
-        "numero_recibos": calcular_variacao_dados(recibos_hoje, recibos_ontem),
-        "itens_vendidos": calcular_variacao_dados(itens_hoje, itens_ontem),
-        "ticket_medio": calcular_variacao_dados(ticket_hoje, ticket_ontem),
-        "comparativo_por_hora": comparativo_por_hora_numerico
+        "periodo": periodos.get(periodo, "Personalizado"),
+        "total_vendas": calcular_variacao_dados(total_atual, total_ant),
+        "numero_recibos": calcular_variacao_dados(recibos_atual, recibos_ant),
+        "itens_vendidos": calcular_variacao_dados(itens_atual, itens_ant),
+        "ticket_medio": calcular_variacao_dados(ticket_atual, ticket_ant),
+        "comparativo_por_hora": comparativo_por_hora
     }
 
     return jsonify({"dados": dados}), 200
-
 
 
 

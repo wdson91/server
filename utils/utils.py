@@ -98,3 +98,61 @@ def format_variacao(valor: float) -> dict:
     cor = "#28a745" if valor >= 0 else "#dc3545"  # verde vs vermelho
     variacao_formatada = f"{sinal}{abs(round(valor, 1))}%"
     return {"variacao": variacao_formatada, "cor": cor}
+
+from datetime import date, timedelta
+from dateutil.relativedelta import relativedelta
+from collections import defaultdict
+
+def get_periodo_datas(periodo):
+    hoje = date.today()
+
+    if periodo == 0:
+        return hoje, hoje, hoje - timedelta(days=1), hoje - timedelta(days=1)
+
+    elif periodo == 1:
+        ontem = hoje - timedelta(days=1)
+        return ontem, ontem, hoje - timedelta(days=2), hoje - timedelta(days=2)
+
+    elif periodo == 2:
+        inicio_semana = hoje - timedelta(days=hoje.weekday())
+        fim_semana = inicio_semana + timedelta(days=6)
+        inicio_anterior = inicio_semana - timedelta(days=7)
+        fim_anterior = inicio_semana - timedelta(days=1)
+        return inicio_semana, fim_semana, inicio_anterior, fim_anterior
+
+    elif periodo == 3:
+        inicio_mes = hoje.replace(day=1)
+        fim_mes = hoje
+        inicio_anterior = (inicio_mes - relativedelta(months=1)).replace(day=1)
+        fim_anterior = inicio_mes - timedelta(days=1)
+        return inicio_mes, fim_mes, inicio_anterior, fim_anterior
+
+    elif periodo == 4:
+        mes_atual = hoje.month
+        trimestre_inicio_mes = 1 + 3 * ((mes_atual - 1) // 3)
+        inicio_trimestre = hoje.replace(month=trimestre_inicio_mes, day=1)
+        fim_trimestre = hoje
+        inicio_anterior = (inicio_trimestre - relativedelta(months=3)).replace(day=1)
+        fim_anterior = inicio_trimestre - timedelta(days=1)
+        return inicio_trimestre, fim_trimestre, inicio_anterior, fim_anterior
+
+    elif periodo == 5:
+        inicio_ano = hoje.replace(month=1, day=1)
+        fim_ano = hoje
+        inicio_anterior = (inicio_ano - relativedelta(years=1)).replace(month=1, day=1)
+        fim_anterior = inicio_ano - timedelta(days=1)
+        return inicio_ano, fim_ano, inicio_anterior, fim_anterior
+
+    else:
+        raise ValueError("Período inválido. Use: hoje, ontem, semana, mes, trimestre, ano.")
+
+
+
+def buscar_faturas_periodo(nif, data_inicio, data_fim):
+    response = supabase.table("faturas_fatura") \
+        .select("*, itens:faturas_itemfatura(*)") \
+        .gte("data", data_inicio.isoformat()) \
+        .lte("data", data_fim.isoformat()) \
+        .eq("nif", nif) \
+        .execute()
+    return response.data or []
