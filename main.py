@@ -47,8 +47,8 @@ def relatorio():
 
 
 @app.route("/api/stats/today", methods=["GET"])
-@require_valid_token
 @cache.cached(timeout=180, key_prefix=cache_key)
+@require_valid_token
 def stats():
 
     nif = request.args.get("nif")
@@ -145,8 +145,8 @@ def stats():
     return jsonify(resultado), 200
 
 @app.route("/api/stats/report", methods=["GET"])
-@require_valid_token
 @cache.cached(timeout=180, key_prefix=cache_key)
+@require_valid_token
 def faturas_agrupadas_view():
     nif = request.args.get("nif")
     if not nif:
@@ -243,8 +243,8 @@ def faturas_agrupadas_view():
 
 
 @app.route("/api/products", methods=["GET"])
-@require_valid_token
 @cache.cached(timeout=180, key_prefix=cache_key)
+@require_valid_token
 def mais_vendidos():
     nif = request.args.get("nif")
     if not nif or not nif.isdigit():
@@ -318,6 +318,7 @@ from utils.utils import *
 
 @app.route("/api/stats/resumo", methods=["GET"])
 @cache.cached(timeout=180, key_prefix=cache_key)
+@require_valid_token
 def resumo_stats():
     nif = request.args.get("nif")
     if not is_valid_nif(nif):
