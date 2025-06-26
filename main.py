@@ -15,7 +15,8 @@ import pytz
 from datetime import timedelta
 load_dotenv()
 from flask_caching import Cache
-
+from threading import Thread
+import requests
 
 app = Flask(__name__)
 
@@ -26,6 +27,25 @@ cache = Cache(app, config={
 })
 supabase = get_supabase()
 
+def precache_essenciais(nif, token):
+    rotas = [
+        f"http://localhost:8000/api/stats?nif={nif}",
+        f"http://localhost:8000/api/stats/resumo?nif={nif}&periodo=0",
+        f"http://localhost:8000/api/products?nif={nif}&periodo=0",
+        f"http://localhost:8000/api/products?nif={nif}&periodo=1"
+    ]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for rota in rotas:
+        try:
+            requests.get(rota, headers=headers, timeout=10)
+        except Exception as e:
+            print(f"[PreCache] Erro ao acessar {rota}: {e}")
+
+    # Armazena o horário da atualização no Redis
+    tz = pytz.timezone("Europe/Lisbon")
+    agora = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    cache.set(f"ultima_atualizacao:{nif}", agora)
 
 def cache_key():
     nif = request.args.get("nif", "")
@@ -38,11 +58,6 @@ def cache_key():
     rota = request.path  # ex: "/api/products"
     return f"{rota}/{nif}/{periodo}"
 
-
-@app.route('/protegido')
-@require_valid_token
-def protegido():
-    return jsonify({"mensagem": "Acesso permitido!", "user_id": g.user_id})
 
 from getFaturas import get_faturas
 
@@ -251,7 +266,6 @@ def faturas_agrupadas_view():
 @app.route("/api/products", methods=["GET"])
 @require_valid_token
 @cache.cached(timeout=180, key_prefix=cache_key)
-
 def mais_vendidos():
     nif = request.args.get("nif")
     if not is_valid_nif(nif):
@@ -310,17 +324,37 @@ def mais_vendidos():
 
 
 @app.route("/api/limparcache", methods=["DELETE"])
+@require_valid_token
 def limpar_cache():
     """
-    Limpa todo o cache do Redis.
+    Limpa o cache de um NIF específico e recarrega os dados.
     """
+    nif = request.args.get("nif")
+    if not nif:
+        return jsonify({"error": "NIF é obrigatório"}), 400
+
     try:
-        limpar_cache_por_nif(request.args.get("nif"))
-        return jsonify({"message": "Cache limpo com sucesso"}), 200
+        # Limpa tudo relacionado ao NIF no Redis
+        limpar_cache_por_nif(nif)
+
+        # Dispara recacheamento em background
+        token = request.headers.get("Authorization", "").replace("Bearer ", "")
+        Thread(target=precache_essenciais, args=(nif, token)).start()
+
+        return jsonify({"message": "Cache limpo e atualização em background iniciada"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
 
+@app.route("/api/ultima-atualizacao", methods=["GET"])
+@require_valid_token
+def ultima_atualizacao():
+    nif = request.args.get("nif")
+    if not nif:
+        return jsonify({"error": "NIF é obrigatório"}), 400
 
+    ultima = cache.get(f"ultima_atualizacao:{nif}")
+    return jsonify({"nif": nif, "ultima_atualizacao": ultima or "Não disponível"}), 200
 
 
 from utils.utils import *
