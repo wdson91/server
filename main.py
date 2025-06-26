@@ -29,7 +29,12 @@ supabase = get_supabase()
 
 def cache_key():
     nif = request.args.get("nif", "")
-    periodo = int(request.args.get("periodo", 0))
+    periodo_raw = request.args.get("periodo", "0")
+
+    try:
+        periodo = int(periodo_raw)
+    except ValueError:
+        periodo = 0  # valor padrão ou pode levantar erro/logar
     rota = request.path  # ex: "/api/products"
     return f"{rota}/{nif}/{periodo}"
 
