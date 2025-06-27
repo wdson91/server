@@ -1,9 +1,5 @@
-from flask import Flask, request, jsonify, g
-import re
-from datetime import date, datetime, time
-import os
-import json
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, request, jsonify
+from datetime import date, datetime
 import requests
 from sqlalchemy import text
 # carrrega as variáveis de ambiente do arquivo .env
@@ -17,7 +13,7 @@ load_dotenv()
 from flask_caching import Cache
 from threading import Thread
 import requests
-
+from getFaturas import get_faturas
 app = Flask(__name__)
 
 cache = Cache(app, config={
@@ -61,7 +57,7 @@ def cache_key():
     return f"{rota}/{nif}/{periodo}"
 
 
-from getFaturas import get_faturas
+
 
 @app.route("/api/stats", methods=["GET"])
 @require_valid_token
@@ -369,8 +365,8 @@ def ultima_atualizacao():
 from utils.utils import *
 
 @app.route("/api/stats/resumo", methods=["GET"])
-@require_valid_token
-@cache.cached(timeout=180, key_prefix=cache_key)
+#@require_valid_token
+#@cache.cached(timeout=180, key_prefix=cache_key)
 def resumo_stats():
     nif = request.args.get("nif")
     periodo = int(request.args.get("periodo", 0))
@@ -410,7 +406,94 @@ def resumo_stats():
     return jsonify({"dados": dados}), 200
 
 
+from utils.parse_faturas import parse_faturas
+@app.route('/api/upload-fatura', methods=['POST'])
+def upload_fatura():
+    if 'file' not in request.files:
+        return jsonify({"erro": "Arquivo não enviado"}), 400
 
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"erro": "Arquivo sem nome"}), 400
+    
+    try:
+        text = file.read().decode('utf-8')
+    except UnicodeDecodeError:
+        return jsonify({'erro': 'Arquivo com codificação inválida. Use UTF-8'}), 400
+
+    try:
+        lista_faturas = parse_faturas(text)
+        if not lista_faturas:
+            return jsonify({'erro': 'Nenhuma fatura válida encontrada no arquivo'}), 400
+    except Exception as e:
+        return jsonify({'erro': f'Erro ao processar as faturas: {str(e)}'}), 400
+
+    faturas_criadas = []
+    erros = []
+    
+    for fatura in lista_faturas:
+        try:
+            # Valida campos obrigatórios
+            campos_obrigatorios = ['numero_fatura', 'data', 'hora', 'total', 'nif_emitente', 'nif_cliente', 'itens']
+            if any(fatura.get(campo) in [None, '', []] for campo in campos_obrigatorios):
+                erros.append({
+                    'numero_fatura': fatura.get('numero_fatura', 'desconhecido'),
+                    'erro': 'Campos obrigatórios faltando'
+                })
+                continue
+
+            # Prepara dados para inserção
+            numero_fatura_limpo = fatura['numero_fatura'].replace("/", "_").replace(" ", "")
+            now = datetime.utcnow().isoformat()
+            
+            # Insere fatura principal
+            res_fatura = supabase.table("faturas_fatura").insert({
+                "numero_fatura": numero_fatura_limpo,
+                "data": fatura["data"],
+                "hora": fatura["hora"],
+                "total": float(fatura["total"]),
+                "texto_original": fatura["texto_original"],
+                "texto_completo": fatura["texto_completo"],
+                "qrcode": fatura["qrcode"],
+                "nif": fatura["nif_emitente"],
+                "nif_cliente": fatura["nif_cliente"],
+                #"mesa": fatura.get("mesa"),
+                "criado_em": now,
+                "atualizado_em": now
+            }).execute()
+            if not res_fatura.data:
+                erros.append({
+                    'numero_fatura': numero_fatura_limpo,
+                    'erro': 'Falha ao inserir fatura no banco de dados'
+                })
+                continue
+
+            # Insere itens da fatura
+            fatura_id = res_fatura.data[0]['id']
+            for item in fatura['itens']:
+                supabase.table("faturas_itemfatura").insert({
+                    "fatura_id": fatura_id,
+                    "nome": item["nome"],
+                    "quantidade": item["quantidade"],
+                    "preco_unitario": float(item["preco_unitario"]),
+                    "total": float(item["total"]),
+                    #"iva": item["iva"]
+                }).execute()
+
+            faturas_criadas.append(res_fatura.data[0])
+
+        except Exception as e:
+            erros.append({
+                'numero_fatura': fatura.get('numero_fatura', 'desconhecido'),
+                'erro': f'Erro ao processar fatura: {str(e)}'
+            })
+            continue
+
+    return jsonify({
+        "mensagem": f"{len(faturas_criadas)} fatura(s) processada(s) com sucesso",
+        "faturas": faturas_criadas,
+        "erros": erros
+    }), 201 if faturas_criadas else 400
 
 
 if __name__ == '__main__':

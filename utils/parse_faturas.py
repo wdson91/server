@@ -37,114 +37,67 @@ def gerar_qrcode_texto(
         f"R:{certificado}"
     )
 
+import re
+from datetime import datetime
 
+def parse_faturas(text):
+    # Normaliza quebras de linha
+    text = re.sub(r'\n+', '\n', text.strip())
+    
+    faturas = []
 
-def parse_faturas(texto_completo):
-    # Divide o texto com base no início de cada fatura
-    blocos = re.split(r"(?=Fatura-Recibo nº)", texto_completo)
-    blocos = [b.strip() for b in blocos if b.strip()]
+    # Regex principal corrigido
+    fatura_pattern = re.compile(
+        r'(?:.*?N\.I\.F\.\s*(?P<nif_emitente>\d{9}))?.*?'
+        r'Fatura-Recibo nº\s+(?P<numero_fatura>[^\n]+).*?'
+        r'Data:\s*(?P<data>\d{2}/\d{2}/\d{2})\s+(?P<hora>\d{2}:\d{2}).*?'
+        r'(?:Mesa:\s*(?P<mesa>\d+))?.*?'
+        r'\*+\s*N\.I\.F\.\s*:\s*(?P<nif_cliente>\d{9}|Consumidor final)\s*\*+.*?'
+        r'(?P<itens>(?:\d+\s*x\s*[^@]+@\s*[\d,]+\s*(?:\d+%)?\s*[\d,]+\s*\n?)+).*?'
+        r'Total\s+(?P<total>[\d]+(?:,[\d]{1,2})?)',
+        re.DOTALL
+    )
 
-    lista_faturas = []
+    matches = fatura_pattern.finditer(text)
 
-    for fatura_text in blocos:
-        fatura = {
-            "numero_fatura": None,
-            "data": None,
-            "hora": None,
-            "nif_emitente": "000000000",  # padrão
-            "nif_cliente": "999999990",   # padrão
-            "itens": [],
-            "total": 0.0,
-            "texto_original": fatura_text,
-            "texto_completo": None,
-            "qrcode": None,
-        }
+    for match in matches:
+        try:
+            fatura = {
+                "nif_emitente": match.group('nif_emitente') or "000000000",
+                "numero_fatura": match.group('numero_fatura').strip(),
+                "data": datetime.strptime(match.group('data'), '%d/%m/%y').strftime('%Y-%m-%d'),
+                "hora": match.group('hora'),
+                "mesa": match.group('mesa') or None,
+                "nif_cliente": match.group('nif_cliente') or "999999990",
+                "total": match.group('total').replace(',', '.'),
+                "texto_original": match.group(0),
+                "texto_completo": match.group(0),
+                "qrcode": f"FAKE-QR-{match.group('numero_fatura').strip()}",
+                "itens": []
+            }
 
-        # Número da fatura
-        match_num = re.search(r"Fatura-Recibo nº\s*(FR\s*\S+)", fatura_text)
-        if match_num:
-            fatura["numero_fatura"] = match_num.group(1).strip()
-
-        # Data e hora
-        match_data = re.search(r"Data:\s*(\d{1,2})/(\d{1,2})/(\d{2})\s+(\d{2}):(\d{2})", fatura_text)
-        if match_data:
-            dia = match_data.group(1).zfill(2)
-            mes = match_data.group(2).zfill(2)
-            ano = match_data.group(3)
-            hora = match_data.group(4).zfill(2)
-            minuto = match_data.group(5).zfill(2)
-            fatura["data"] = f"20{ano}-{mes}-{dia}"
-            fatura["hora"] = f"{hora}:{minuto}:00"
-
-        # NIFs
-        nifs_encontrados = re.findall(r"N\.I\.F\.[:\s]*([0-9]{9})", fatura_text, re.IGNORECASE)
-        if len(nifs_encontrados) > 0:
-            fatura["nif_emitente"] = nifs_encontrados[0]
-        if len(nifs_encontrados) > 1:
-            fatura["nif_cliente"] = nifs_encontrados[1]
-
-        # Itens
-        item_pattern = re.findall(
-            r"(\d+)\s+x\s+(.+?)\s+@\s+([\d,\.]+)[^\n\r]*?(\d{1,2})%\s+([\d,\.]+)",
-            fatura_text
-        )
-        for qty, name, unit_price, tax, total in item_pattern:
-            preco_unit = float(unit_price.replace(",", "."))
-            total_item = float(total.replace(",", "."))
-            taxa_iva = float(tax) / 100
-            fatura["itens"].append({
-                "nome": name.strip(),
-                "quantidade": int(qty),
-                "preco_unitario": preco_unit,
-                "taxa_iva": taxa_iva,
-                "total": total_item
-            })
-
-        # Total
-        match_total = re.search(r"Total\s+([\d,\.]+)", fatura_text)
-        if match_total:
-            fatura["total"] = float(match_total.group(1).replace(",", "."))
-
-        # IVA
-        iva_total = sum(item["total"] * item["taxa_iva"] for item in fatura["itens"])
-        total_impostos = round(iva_total, 2)
-       
-        # Apenas gera o QR Code se a data e número da fatura foram extraídos corretamente
-        if fatura["data"] and fatura["numero_fatura"]:
-            qrcode_texto = gerar_qrcode_texto(
-                nif_emitente=fatura["nif_emitente"],
-                nif_cliente=fatura["nif_cliente"],
-                tipo_doc="FR",
-                autofaturado="N",
-                data_doc=fatura["data"].replace("-", ""),
-                numero_doc=fatura["numero_fatura"],
-                pais="PT",
-                iva_total=iva_total,
-                outros_impostos=0.00,
-                retencao=0.00,
-                total_impostos=total_impostos,
-                estado="F/eR",
-                certificado="1530"
+            # Extrai itens
+            itens_text = match.group('itens')
+            item_pattern = re.compile(
+                r'(\d+)\s*x\s*([^@]+)@\s*([\d,]+)\s*(?:(\d+)%\s*)?([\d,]+)?'
             )
-            fatura["qrcode"] = qrcode_texto
-        else:
-            fatura["qrcode"] = None  # ou "" se preferir
+            for item in item_pattern.finditer(itens_text):
+                qtd = int(item.group(1))
+                nome = item.group(2).strip()
+                preco = float(item.group(3).replace(',', '.'))
+                iva = item.group(4) if item.group(4) else "0"
+                total_item = item.group(5).replace(',', '.') if item.group(5) else f"{preco * qtd:.2f}"
+                fatura["itens"].append({
+                    "nome": nome,
+                    "quantidade": qtd,
+                    "preco_unitario": f"{preco:.2f}",
+                    "iva": iva,
+                    "total": total_item
+                })
 
-        
-        # Inserção do QR Code após o ATCUD
-        atcud_match = re.search(r"(.*?ATCUD:\s*\S+.*?\n)", fatura_text, re.DOTALL)
-        if atcud_match:
-            pos = atcud_match.end()
-            parte1 = fatura_text[:pos].rstrip()
-            parte2 = fatura_text[pos:].lstrip()
-            texto_com_qrcode = f"{parte1}\n\n[[QR_CODE]]\n\n{parte2}"
-        else:
-            texto_com_qrcode = f"{fatura_text}\n\n[[QR_CODE]]"
+            faturas.append(fatura)
+        except Exception as e:
+            print(f"Erro ao processar fatura: {e}")
+            continue
 
-        fatura["texto_completo"] = texto_com_qrcode
-
-        lista_faturas.append(fatura)
-
-    return lista_faturas
-
-
+    return faturas
