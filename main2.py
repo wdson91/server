@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,send_file
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 import os
@@ -283,6 +283,100 @@ def upload_fatura():
                 erros.append({'numero_fatura':nf,'erro':msg})
     status = 201 if criadas else 400
     return jsonify({'mensagem':f'{len(criadas)} fatura(s) processada(s) com sucesso','faturas':criadas,'erros':erros}),status
+
+
+
+@app.route("/api/faturas", methods=["GET"])
+@require_valid_token
+def buscar_faturas_periodo_route():
+    nif = request.args.get("nif")
+    periodo_raw = request.args.get("periodo", "0")
+
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    try:
+        periodo = int(periodo_raw)
+    except ValueError:
+        return jsonify({"error": "Período inválido. Deve ser um número inteiro."}), 400
+
+    try:
+        data_inicio, data_fim , inicio_anterior, fim_anterior  = get_periodo_datas(periodo)
+        print(f"Período selecionado: {data_inicio} a {data_fim}")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Consulta no Supabase
+    result = supabase.table("faturas_fatura") \
+        .select("id, data, total,numero_fatura,hora ") \
+        .eq("nif", nif) \
+        .gte("data", data_inicio.isoformat()) \
+        .lte("data", data_fim.isoformat()) \
+        .execute()
+
+    faturas = result.data or []
+    
+    if not faturas:
+        return jsonify({"message": "Nenhuma fatura encontrada para esse período."}), 404
+
+    return jsonify({"faturas": faturas, "periodo": {"inicio": str(data_inicio), "fim": str(data_fim)}})
+
+
+from utils.gerarPdf import gerar_pdf
+@app.route('/api/faturas/pdf', methods=['GET'])
+def baixar_fatura_pdf():
+    # Busca no Supabase pelo número da fatura
+
+    numero_fatura = request.args.get('numero_fatura', '').strip()
+    
+    response = supabase.table("faturas_fatura") \
+        .select("texto_completo, qrcode") \
+        .eq("numero_fatura", numero_fatura) \
+        .single() \
+        .execute()
+
+    
+    
+    fatura = response.data
+    if not fatura:
+        return jsonify({"error": "Fatura não encontrada"}), 404
+
+    texto_completo = fatura.get("texto_completo")
+    if not texto_completo:
+        return jsonify({"error": "Texto completo da fatura não encontrado"}), 404
+    qrcode = fatura.get("qrcode")
+    pdf_buffer = gerar_pdf(texto_completo,qrcode)
+
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name=f'fatura_{numero_fatura}.pdf',
+        mimetype='application/pdf'
+    )
+
+
+@app.route("/api/faturas/todas", methods=["GET"])
+@require_valid_token
+def buscar_todas_faturas():
+    nif = request.args.get("nif")  # Obtém o NIF do query param
+    
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    # Consulta no Supabase (sem filtro de data)
+    result = supabase.table("faturas_fatura") \
+        .select("numero_fatura, total, hora, data") \
+        .eq("nif", nif) \
+        .order("data", desc=True) \
+        .execute()
+
+    faturas = result.data or []
+    
+    if not faturas:
+        return jsonify({"message": "Nenhuma fatura encontrada para este NIF."}), 404
+
+    return jsonify({"faturas": faturas, "total": len(faturas)})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0',port=8000,debug=True)

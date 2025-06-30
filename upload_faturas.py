@@ -26,7 +26,7 @@ def enviar_faturas_para_api(diretorio="faturas_simuladas", url_api="http://local
 
                 if response.status_code == 201:
                     print(f"{arquivo} enviado com sucesso!\n")
-                    deve_apagar = False
+                    deve_apagar = True
 
                 elif response.status_code != 200:
                     try:

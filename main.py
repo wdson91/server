@@ -495,6 +495,40 @@ def upload_fatura():
         "erros": erros
     }), 201 if faturas_criadas else 400
 
+@app.route("/api/faturas", methods=["GET"])
+@require_valid_token
+def buscar_faturas_periodo_route():
+    nif = request.args.get("nif")
+    periodo_raw = request.args.get("periodo", "0")
+
+    if not nif or not nif.isdigit():
+        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
+
+    try:
+        periodo = int(periodo_raw)
+    except ValueError:
+        return jsonify({"error": "Período inválido. Deve ser um número inteiro."}), 400
+
+    try:
+        data_inicio, data_fim = get_periodo_datas(periodo)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    # Consulta no Supabase
+    result = supabase.table("faturas_fatura") \
+        .select("*") \
+        .eq("nif", nif) \
+        .gte("data", data_inicio.isoformat()) \
+        .lte("data", data_fim.isoformat()) \
+        .execute()
+
+    faturas = result.data or []
+
+    if not faturas:
+        return jsonify({"message": "Nenhuma fatura encontrada para esse período."}), 404
+
+    return jsonify({"faturas": faturas, "periodo": {"inicio": str(data_inicio), "fim": str(data_fim)}})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=True)

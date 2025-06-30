@@ -1,19 +1,30 @@
 import re
+from datetime import datetime
+import re
+import qrcode
+from io import BytesIO
+from PIL import Image
+from fpdf import FPDF
+from datetime import datetime
 
-def inserir_qrcode_apos_atcud(texto, qrcode_texto):
-    # Regex que pega a linha inteira que começa com "ATCUD:" (com qualquer coisa depois)
-    pattern = re.compile(r"^(ATCUD:\s*\S.*)$", flags=re.MULTILINE)
 
-    # Função para substituir a linha do ATCUD pela mesma linha + QR code na linha seguinte
-    def replacer(match):
-        linha_atcud = match.group(1)
-        return f"{linha_atcud}\n{qrcode_texto}"
+def limpar_excesso_caracteres(texto, caractere='*', max_repetidos=33):
+    """Remove excesso de caracteres repetidos (ex: '******' -> '***')"""
+    padrao = re.compile(fr'({re.escape(caractere)}){{{max_repetidos},}}')
+    return padrao.sub(caractere * max_repetidos, texto)
 
-    texto_modificado, n = pattern.subn(replacer, texto)
-    if n == 0:
-        # Se não encontrou ATCUD, insere no final do texto (opcional)
-        texto_modificado = texto + "\n" + qrcode_texto
-    return texto_modificado
+def inserir_marcador_qrcode(texto_fatura):
+    """Insere o marcador [[QR_CODE]] após o ATCUD"""
+    padrao_atcud = re.compile(r"^(ATCUD:\s*[^\n]+)", re.MULTILINE | re.IGNORECASE)
+    match = padrao_atcud.search(texto_fatura)
+    
+    if match:
+        posicao = match.end()
+        return texto_fatura[:posicao] + "\n[[QR_CODE]]\n" + texto_fatura[posicao:]
+    
+    # Fallback: insere no final se não encontrar ATCUD
+    return texto_fatura + "\n[[QR_CODE]]"
+
 
 def gerar_qrcode_texto(
     nif_emitente, nif_cliente, tipo_doc, autofaturado, data_doc, numero_doc,
@@ -37,16 +48,11 @@ def gerar_qrcode_texto(
         f"R:{certificado}"
     )
 
-import re
-from datetime import datetime
-
 def parse_faturas(text):
-    # Normaliza quebras de linha
-    text = re.sub(r'\n+', '\n', text.strip())
-    
+    text = limpar_excesso_caracteres(text.strip(), '*', 33)  # Mantém no máximo 3 asteriscos seguidos
+    text = re.sub(r'\n+', '\n', text)  # Remove múltiplas quebras de linha
     faturas = []
 
-    # Regex principal corrigido
     fatura_pattern = re.compile(
         r'(?:.*?N\.I\.F\.\s*(?P<nif_emitente>\d{9}))?.*?'
         r'Fatura-Recibo nº\s+(?P<numero_fatura>[^\n]+).*?'
@@ -62,21 +68,44 @@ def parse_faturas(text):
 
     for match in matches:
         try:
+            # Definir valores para gerar o QR code
+            nif_emitente = match.group('nif_emitente') or "000000000"
+            nif_cliente = match.group('nif_cliente') if match.group('nif_cliente') != "Consumidor final" else "999999990"
+            tipo_doc = "FT"  # Exemplo fixo, ajuste conforme necessário
+            autofaturado = "N"  # Exemplo fixo
+            data_doc = datetime.strptime(match.group('data'), '%d/%m/%y').strftime('%Y-%m-%d')
+            numero_doc = match.group('numero_fatura').strip()
+            pais = "PT"  # Exemplo fixo
+            iva_total = 0.0  # Ajuste se tiver esse dado
+            outros_impostos = 0.0  # Ajuste se tiver esse dado
+            retencao = 0.0  # Ajuste se tiver esse dado
+            total_impostos = 0.0  # Ajuste se tiver esse dado
+            estado = "N"  # Exemplo fixo
+            certificado = "CERT123"  # Exemplo fixo
+
+            qrcode = gerar_qrcode_texto(
+                nif_emitente, nif_cliente, tipo_doc, autofaturado, data_doc, numero_doc,
+                pais, iva_total, outros_impostos, retencao, total_impostos, estado, certificado
+            )
+
+            texto_original = match.group(0)
+            texto_completo = inserir_marcador_qrcode(text)
+            
+            print(f"Texto completo com QR Code:\n{texto_completo}\n")
             fatura = {
-                "nif_emitente": match.group('nif_emitente') or "000000000",
-                "numero_fatura": match.group('numero_fatura').strip(),
-                "data": datetime.strptime(match.group('data'), '%d/%m/%y').strftime('%Y-%m-%d'),
+                "nif_emitente": nif_emitente,
+                "numero_fatura": numero_doc,
+                "data": data_doc,
                 "hora": match.group('hora'),
                 "mesa": match.group('mesa') or None,
-                "nif_cliente": match.group('nif_cliente') or "999999990",
+                "nif_cliente": nif_cliente,
                 "total": match.group('total').replace(',', '.'),
-                "texto_original": match.group(0),
-                "texto_completo": match.group(0),
-                "qrcode": f"FAKE-QR-{match.group('numero_fatura').strip()}",
+                "texto_original": texto_original,
+                "texto_completo": texto_completo,
+                "qrcode": qrcode,
                 "itens": []
             }
 
-            # Extrai itens
             itens_text = match.group('itens')
             item_pattern = re.compile(
                 r'(\d+)\s*x\s*([^@]+)@\s*([\d,]+)\s*(?:(\d+)%\s*)?([\d,]+)?'
