@@ -236,7 +236,7 @@ def resumo_stats():
             'numero_recibos': calcular_variacao_dados(rec_at,rec_bt), 'itens_vendidos': calcular_variacao_dados(it_at,it_bt),
             'ticket_medio': calcular_variacao_dados(tk_at,tk_bt), 'comparativo_por_hora': comp}
     cache.set(f'ultima_atualizacao:{nif}', datetime.now(TZ).strftime('%d-%m %H:%M'))
-    return jsonify({data}),200
+    return jsonify(data),200
 
 @app.route('/api/upload-fatura', methods=['POST'])
 def upload_fatura():
