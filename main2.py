@@ -310,7 +310,7 @@ def buscar_faturas_periodo_route():
 
     # Consulta no Supabase
     result = supabase.table("faturas_fatura") \
-        .select("id, data, total,numero_fatura,hora ") \
+        .select("id, data, total,numero_fatura,hora,nif_cliente ") \
         .eq("nif", nif) \
         .gte("data", data_inicio.isoformat()) \
         .lte("data", data_fim.isoformat()) \
@@ -367,7 +367,7 @@ def buscar_todas_faturas():
 
     # Consulta no Supabase (sem filtro de data)
     result = supabase.table("faturas_fatura") \
-        .select("numero_fatura, total, hora, data") \
+        .select("numero_fatura, total, hora, data,nif_cliente") \
         .eq("nif", nif) \
         .order("data", desc=True) \
         .execute()
