@@ -3,7 +3,7 @@ from datetime import datetime, date, timedelta
 from collections import defaultdict
 import os
 import pytz
-
+from flask_cors import CORS
 from dotenv import load_dotenv
 from flask_caching import Cache
 from threading import Thread
@@ -15,9 +15,11 @@ from utils.parse_faturas import parse_faturas
 from getFaturas import get_faturas
 from utils.utils import is_valid_nif, get_periodo_datas, buscar_faturas_periodo, parse_periodo, calcular_stats, agrupar_por_hora, gerar_comparativo_por_hora, limpar_cache_por_nif , calcular_variacao_dados
 
+
 # Configuração
 load_dotenv()
 app = Flask(__name__)
+CORS(app)
 app.config.from_mapping({
     'CACHE_TYPE': 'RedisCache',
     'CACHE_REDIS_URL': os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
