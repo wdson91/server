@@ -167,11 +167,12 @@ def get_periodo_datas(periodo):
 
 
 
-def buscar_faturas_periodo(nif, data_inicio, data_fim):
-    response = supabase.table("faturas_fatura") \
-        .select("*, itens:faturas_itemfatura(*)") \
-        .gte("data", data_inicio.isoformat()) \
-        .lte("data", data_fim.isoformat()) \
-        .eq("nif", nif) \
-        .execute()
-    return response.data or []
+def buscar_faturas_periodo(nif, data_ini, data_fim, filial=None):
+    query = supabase.table('faturas_fatura')\
+        .select('*')\
+        .gte('data', data_ini)\
+        .lte('data', data_fim)\
+        .eq('nif', nif)
+    if filial:
+        query = query.eq('filial', filial)
+    return query.execute().data or []

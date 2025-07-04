@@ -20,9 +20,11 @@ from utils.utils import is_valid_nif, get_periodo_datas, buscar_faturas_periodo,
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
+
+
 app.config.from_mapping({
     'CACHE_TYPE': 'RedisCache',
-    'CACHE_REDIS_URL': os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    'CACHE_REDIS_URL': os.getenv('REDIS_URL'),
     'CACHE_DEFAULT_TIMEOUT': 180,
 })
 cache = Cache(app)
@@ -51,6 +53,11 @@ def precache_essenciais(nif, token):
     cache.set(f'ultima_atualizacao:{nif}', datetime.now(TZ).strftime('%d-%m %H:%M'))
 
 # Endpoints
+
+@app.route("/")
+def home():
+    return "hello"
+
 
 @app.route('/api/stats', methods=['GET'])
 @require_valid_token
@@ -217,74 +224,143 @@ def ultima_atualizacao():
 
 @app.route('/api/stats/resumo', methods=['GET'])
 def resumo_stats():
-    nif = request.args.get('nif','')
-    try: p = int(request.args.get('periodo','0'))
-    except: return jsonify({'error':'Período inválido'}),400
-    if not is_valid_nif(nif): return jsonify({'error':'NIF inválido'}),400
+    if request.method == "OPTIONS":
+        response = jsonify({"message": "OK"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "GET,OPTIONS")
+        return response, 200
+
+    # Esperado: 514757876_000101
+    nif_raw = request.args.get('nif', '')
+    try:
+        nif_partes = nif_raw.split('_')
+        if len(nif_partes) != 2:
+            raise ValueError("Formato do NIF inválido. Use NIF_FILIAL.")
+        nif = nif_partes[0]
+        filial = nif_partes[1]
+    except Exception:
+        return jsonify({'error': 'Formato do NIF inválido. Use NIF_FILIAL.'}), 400
+
+    if not is_valid_nif(nif):
+        return jsonify({'error': 'NIF inválido'}), 400
+
+    try:
+        p = int(request.args.get('periodo', '0'))
+    except:
+        return jsonify({'error': 'Período inválido'}), 400
+
     try:
         di, df, dia, dfan = get_periodo_datas(p)
     except ValueError as e:
-        return jsonify({'error':str(e)}),400
-    fa = buscar_faturas_periodo(nif,di,df)
-    fb = buscar_faturas_periodo(nif,dia,dfan)
+        return jsonify({'error': str(e)}), 400
+
+    # Agora busca por NIF e FILIAL
+    fa = buscar_faturas_periodo(nif, di, df, filial=filial)
+    fb = buscar_faturas_periodo(nif, dia, dfan, filial=filial)
+
     total_at, rec_at, it_at, tk_at = calcular_stats(fa)
     total_bt, rec_bt, it_bt, tk_bt = calcular_stats(fb)
+
     v_at = agrupar_por_hora(fa)
     v_bt = agrupar_por_hora(fb)
+
     comp = gerar_comparativo_por_hora(v_at, v_bt)
-    data = {'periodo': parse_periodo(p), 'total_vendas': calcular_variacao_dados(total_at,total_bt),
-            'numero_recibos': calcular_variacao_dados(rec_at,rec_bt), 'itens_vendidos': calcular_variacao_dados(it_at,it_bt),
-            'ticket_medio': calcular_variacao_dados(tk_at,tk_bt), 'comparativo_por_hora': comp}
-    cache.set(f'ultima_atualizacao:{nif}', datetime.now(TZ).strftime('%d-%m %H:%M'))
-    return jsonify(data),200
+
+    data = {
+        'periodo': parse_periodo(p),
+        'total_vendas': calcular_variacao_dados(total_at, total_bt),
+        'numero_recibos': calcular_variacao_dados(rec_at, rec_bt),
+        'itens_vendidos': calcular_variacao_dados(it_at, it_bt),
+        'ticket_medio': calcular_variacao_dados(tk_at, tk_bt),
+        'comparativo_por_hora': comp
+    }
+
+    cache.set(f'ultima_atualizacao:{nif}_{filial}', datetime.now(TZ).strftime('%d-%m %H:%M'))
+    return jsonify(data), 200
+
+
+
+
 
 @app.route('/api/upload-fatura', methods=['POST'])
 def upload_fatura():
     if 'file' not in request.files:
-        return jsonify({'erro':'Arquivo não enviado'}),400
+        return jsonify({'erro': 'Arquivo não enviado'}), 400
+
     f = request.files['file']
     if not f.filename:
-        return jsonify({'erro':'Arquivo sem nome'}),400
+        return jsonify({'erro': 'Arquivo sem nome'}), 400
+
     try:
         text = f.read().decode('utf-8')
     except UnicodeDecodeError:
-        return jsonify({'erro':'Arquivo com codificação inválida. Use UTF-8'}),400
+        return jsonify({'erro': 'Arquivo com codificação inválida. Use UTF-8'}), 400
+
     try:
         fats = parse_faturas(text)
         if not fats:
-            return jsonify({'erro':'Nenhuma fatura válida encontrada no arquivo'}),400
+            return jsonify({'erro': 'Nenhuma fatura válida encontrada no arquivo'}), 400
     except Exception as e:
-        return jsonify({'erro':str(e)}),400
+        return jsonify({'erro': str(e)}), 400
+
     criadas, erros = [], []
+
     for fa in fats:
-        if any(not fa.get(c) for c in ['numero_fatura','data','hora','total','nif_emitente','nif_cliente','itens']):
-            erros.append({'numero_fatura':fa.get('numero_fatura','desconhecido'),'erro':'Campos obrigatórios faltando'})
+        # Agora 'filial' também é obrigatório
+        campos_obrigatorios = ['numero_fatura', 'data', 'hora', 'total', 'nif_emitente', 'nif_cliente', 'itens', 'filial']
+        if any(not fa.get(c) for c in campos_obrigatorios):
+            erros.append({
+                'numero_fatura': fa.get('numero_fatura', 'desconhecido'),
+                'erro': 'Campos obrigatórios faltando'
+            })
             continue
-        nf = fa['numero_fatura'].replace('/','_').replace(' ','')
+
+        nf = fa['numero_fatura'].replace('/', '_').replace(' ', '')
         now = datetime.utcnow().isoformat()
+
         try:
             res = supabase.table('faturas_fatura').insert({
-                'numero_fatura':nf,'data':fa['data'],'hora':fa['hora'],'total':float(fa['total']),
-                'texto_original':fa['texto_original'],'texto_completo':fa['texto_completo'],'qrcode':fa['qrcode'],
-                'nif':fa['nif_emitente'],'nif_cliente':fa['nif_cliente'],'criado_em':now,'atualizado_em':now
+                'numero_fatura': nf,
+                'data': fa['data'],
+                'hora': fa['hora'],
+                'total': float(fa['total']),
+                'texto_original': fa['texto_original'],
+                'texto_completo': fa['texto_completo'],
+                'qrcode': fa['qrcode'],
+                'filial': fa['filial'],  # 👈 campo filial incluído
+                'nif': fa['nif_emitente'],
+                'nif_cliente': fa['nif_cliente'],
+                'criado_em': now,
+                'atualizado_em': now
             }).execute()
+
             if not res.data:
                 raise ValueError('Falha ao inserir fatura no banco de dados')
+
             fid = res.data[0]['id']
+
             for it in fa['itens']:
                 supabase.table('faturas_itemfatura').insert({
-                    'fatura_id':fid,'nome':it['nome'],'quantidade':it['quantidade'],
-                    'preco_unitario':float(it['preco_unitario']),'total':float(it['total'])
+                    'fatura_id': fid,
+                    'nome': it['nome'],
+                    'quantidade': it['quantidade'],
+                    'preco_unitario': float(it['preco_unitario']),
+                    'total': float(it['total'])
                 }).execute()
+
             criadas.append(res.data[0])
+
         except Exception as e:
             msg = str(e)
-            if '23505' in msg:
-                erros.append({'numero_fatura':nf,'erro':msg})
-            else:
-                erros.append({'numero_fatura':nf,'erro':msg})
+            erros.append({'numero_fatura': nf, 'erro': msg})
+
     status = 201 if criadas else 400
-    return jsonify({'mensagem':f'{len(criadas)} fatura(s) processada(s) com sucesso','faturas':criadas,'erros':erros}),status
+    return jsonify({
+        'mensagem': f'{len(criadas)} fatura(s) processada(s) com sucesso',
+        'faturas': criadas,
+        'erros': erros
+    }), status
 
 
 

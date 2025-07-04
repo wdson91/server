@@ -48,11 +48,17 @@ def gerar_qrcode_texto(
         f"R:{certificado}"
     )
 
+import re
+from datetime import datetime
+
 def parse_faturas(text):
-    text = limpar_excesso_caracteres(text.strip(), '*', 33)  # Mantém no máximo 3 asteriscos seguidos
-    text = re.sub(r'\n+', '\n', text)  # Remove múltiplas quebras de linha
+    # Limpeza inicial
+    text = limpar_excesso_caracteres(text.strip(), '*', 33)
+    text = re.sub(r'\n+', '\n', text)
+
     faturas = []
 
+    # Padrão para extrair todos os dados da fatura
     fatura_pattern = re.compile(
         r'(?:.*?N\.I\.F\.\s*(?P<nif_emitente>\d{9}))?.*?'
         r'Fatura-Recibo nº\s+(?P<numero_fatura>[^\n]+).*?'
@@ -68,20 +74,28 @@ def parse_faturas(text):
 
     for match in matches:
         try:
-            # Definir valores para gerar o QR code
+            # Dados básicos
             nif_emitente = match.group('nif_emitente') or "000000000"
-            nif_cliente = match.group('nif_cliente') if match.group('nif_cliente') != "Consumidor final" else "999999990"
-            tipo_doc = "FT"  # Exemplo fixo, ajuste conforme necessário
-            autofaturado = "N"  # Exemplo fixo
+            nif_cliente = match.group('nif_cliente')
+            if nif_cliente == "Consumidor final":
+                nif_cliente = "999999990"
             data_doc = datetime.strptime(match.group('data'), '%d/%m/%y').strftime('%Y-%m-%d')
             numero_doc = match.group('numero_fatura').strip()
-            pais = "PT"  # Exemplo fixo
-            iva_total = 0.0  # Ajuste se tiver esse dado
-            outros_impostos = 0.0  # Ajuste se tiver esse dado
-            retencao = 0.0  # Ajuste se tiver esse dado
-            total_impostos = 0.0  # Ajuste se tiver esse dado
-            estado = "N"  # Exemplo fixo
-            certificado = "CERT123"  # Exemplo fixo
+
+            # Extrair número da filial (entre 'FR' e 'Y')
+            match_filial = re.search(r'FR\s*(\d+)[Yy]', numero_doc)
+            filial = match_filial.group(1) if match_filial else '000000'
+
+            # QRCode fictício (ajuste conforme sua lógica real)
+            tipo_doc = "FT"
+            autofaturado = "N"
+            pais = "PT"
+            iva_total = 0.0
+            outros_impostos = 0.0
+            retencao = 0.0
+            total_impostos = 0.0
+            estado = "N"
+            certificado = "CERT123"
 
             qrcode = gerar_qrcode_texto(
                 nif_emitente, nif_cliente, tipo_doc, autofaturado, data_doc, numero_doc,
@@ -90,8 +104,8 @@ def parse_faturas(text):
 
             texto_original = match.group(0)
             texto_completo = inserir_marcador_qrcode(text)
-            
-            print(f"Texto completo com QR Code:\n{texto_completo}\n")
+
+            # Montar dicionário da fatura
             fatura = {
                 "nif_emitente": nif_emitente,
                 "numero_fatura": numero_doc,
@@ -103,9 +117,11 @@ def parse_faturas(text):
                 "texto_original": texto_original,
                 "texto_completo": texto_completo,
                 "qrcode": qrcode,
+                "filial": filial,
                 "itens": []
             }
 
+            # Extrair itens
             itens_text = match.group('itens')
             item_pattern = re.compile(
                 r'(\d+)\s*x\s*([^@]+)@\s*([\d,]+)\s*(?:(\d+)%\s*)?([\d,]+)?'
@@ -125,8 +141,10 @@ def parse_faturas(text):
                 })
 
             faturas.append(fatura)
+
         except Exception as e:
             print(f"Erro ao processar fatura: {e}")
             continue
 
     return faturas
+

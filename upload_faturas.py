@@ -21,7 +21,7 @@ def enviar_faturas_para_api(diretorio="faturas_simuladas", url_api="http://local
                 #print(f"Enviando {arquivo}...")
                 response = requests.post(url_api, files=files)
                 
-
+                print(response.text)
                 deve_apagar = False
 
                 if response.status_code == 201:

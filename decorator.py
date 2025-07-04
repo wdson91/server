@@ -12,10 +12,10 @@ def decode_supabase_token_sem_verificacao(token):
 def require_valid_token(view_func):
     @wraps(view_func)
     def wrapped_view(*args, **kwargs):
-        # if request.remote_addr == "127.0.0.1":
-        #     from flask import g
-        #     g.user_id = "local-dev"
-        #     return view_func(*args, **kwargs)
+        if request.remote_addr == "127.0.0.1":
+            from flask import g
+            g.user_id = "local-dev"
+            return view_func(*args, **kwargs)
         auth_header = request.headers.get("Authorization")
         
 
