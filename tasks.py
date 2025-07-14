@@ -43,6 +43,29 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def extract_filial_from_invoice_no(invoice_no: str) -> str:
+    """Extrai a filial do número da fatura (valor entre FR e Y)"""
+    try:
+        if not invoice_no:
+            return ""
+        
+        # Procurar por padrão FR + espaço + números + Y
+        import re
+        pattern = r'FR\s+(\d+)Y'
+        match = re.search(pattern, invoice_no)
+        
+        if match:
+            filial = match.group(1)
+            logger.info(f"✅ Filial extraída: {filial} do número: {invoice_no}")
+            return filial
+        else:
+            logger.warning(f"⚠️ Padrão de filial não encontrado em: {invoice_no}")
+            return ""
+            
+    except Exception as e:
+        logger.error(f"❌ Erro ao extrair filial de {invoice_no}: {str(e)}")
+        return ""
+
 def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
     """Converte arquivo XML para JSON"""
     try:
@@ -130,6 +153,10 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 line_data = line_data[0] if line_data else {}
             tax_data = line_data.get('Tax', {})
             
+            # Extrair filial do número da fatura
+            invoice_no = invoice.get('InvoiceNo', '')
+            filial = extract_filial_from_invoice_no(invoice_no)
+            
             fatura = {
                 "CompanyID": company_data["CompanyID"],
                 "CompanyName": company_data["CompanyName"],
@@ -137,7 +164,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "City": company_data["City"],
                 "PostalCode": company_data["PostalCode"],
                 "Country": company_data["Country"],
-                "InvoiceNo": invoice.get('InvoiceNo', ''),
+                "InvoiceNo": invoice_no,
+                "Filial": filial,  # Novo campo filial
                 "ATCUD": invoice.get('ATCUD', ''),
                 "CustomerID": invoice.get('CustomerID', ''),
                 "InvoiceDate": invoice.get('InvoiceDate', ''),
@@ -313,21 +341,6 @@ def process_and_insert_invoice_batch(file_path: Path):
 
         logger.info(f"📊 Dados carregados: {data['total_faturas']} faturas")
 
-        # Inserir arquivo
-        logger.info("📝 Inserindo arquivo no banco...")
-        file_insert = supabase.table("invoice_files").insert({
-            "filename": data["arquivo_origem"],
-            "data_processamento": data["data_processamento"],
-            "total_faturas": data["total_faturas"]
-        }).execute()
-
-        if not file_insert.data:
-            logger.error("❌ Erro: Resposta vazia ao inserir arquivo")
-            return
-
-        file_id = file_insert.data[0]["id"]
-        logger.info(f"✅ Arquivo inserido com ID: {file_id}")
-
         # Preparar dados para inserção em lote
         companies_batch = []
         invoices_batch = []
@@ -350,6 +363,7 @@ def process_and_insert_invoice_batch(file_path: Path):
             # Preparar fatura para lote
             invoices_batch.append({
                 "invoice_no": fatura["InvoiceNo"],
+                "filial": fatura["Filial"],  # Novo campo filial
                 "atcud": fatura["ATCUD"],
                 "company_id": fatura["CompanyID"],
                 "customer_id": fatura["CustomerID"],
@@ -388,6 +402,29 @@ def process_and_insert_invoice_batch(file_path: Path):
         invoices_response = insert_invoices_batch(invoices_batch)
         
         if invoices_response and invoices_response.data:
+            # Verificar se o arquivo já existe
+            existing_file = supabase.table("invoice_files").select("id").eq("filename", data["arquivo_origem"]).execute()
+            
+            if existing_file.data:
+                # Arquivo já existe, usar o ID existente
+                file_id = existing_file.data[0]["id"]
+                logger.info(f"ℹ️ Arquivo já existe com ID: {file_id}, reutilizando")
+            else:
+                # Só inserir o arquivo se pelo menos uma fatura foi inserida com sucesso
+                logger.info("📝 Inserindo arquivo no banco (faturas foram inseridas)...")
+                file_insert = supabase.table("invoice_files").insert({
+                    "filename": data["arquivo_origem"],
+                    "data_processamento": data["data_processamento"],
+                    "total_faturas": data["total_faturas"]
+                }).execute()
+
+                if not file_insert.data:
+                    logger.error("❌ Erro: Resposta vazia ao inserir arquivo")
+                    return False
+
+                file_id = file_insert.data[0]["id"]
+                logger.info(f"✅ Arquivo inserido com ID: {file_id}")
+
             # Mapear invoice_no para invoice_id para as linhas
             invoice_mapping = {}
             for invoice in invoices_response.data:
@@ -441,12 +478,15 @@ def process_and_insert_invoice_batch(file_path: Path):
             else:
                 logger.warning("⚠️ Nenhum link para inserir (faturas não foram inseridas)")
         else:
-            logger.error("❌ Falha ao inserir faturas, linhas não serão inseridas")
+            logger.error("❌ Falha ao inserir faturas, arquivo e linhas não serão inseridas")
+            return False
 
         logger.info(f"✅ Arquivo processado com sucesso: {file_path}")
+        return True
                 
     except Exception as e:
         logger.error(f"Erro ao processar arquivo {file_path}: {str(e)}")
+        return False
 
 @celery_app.task
 def process_single_xml_file(xml_file_path: str):
@@ -474,27 +514,36 @@ def process_single_xml_file(xml_file_path: str):
                 json.dump(json_data, f, ensure_ascii=False, indent=2)
             
             # Processar e inserir no Supabase usando inserção em lote
-            process_and_insert_invoice_batch(Path(json_path))
+            insertion_success = process_and_insert_invoice_batch(Path(json_path))
             
-            # Excluir arquivo do SFTP após processamento bem-sucedido
-            logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
-            sftp_deleted = delete_file_from_sftp(xml_file_path)
-            
-            if sftp_deleted:
-                logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+            if insertion_success:
+                # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
+                logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
+                sftp_deleted = delete_file_from_sftp(xml_file_path)
+                
+                if sftp_deleted:
+                    logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                else:
+                    logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
+                
+                # Remover arquivos locais após processamento bem-sucedido
+                remove_file_safely(xml_file_path, "Arquivo XML")
+                remove_file_safely(json_path, "Arquivo JSON")
+                
+                logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
+                return {
+                    "status": "success", 
+                    "file": xml_file_path, 
+                    "total_faturas": json_data.get("total_faturas", 0)
+                }
             else:
-                logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
-            
-            # Remover arquivos locais após processamento
-            remove_file_safely(xml_file_path, "Arquivo XML")
-            remove_file_safely(json_path, "Arquivo JSON")
-            
-            logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
-            return {
-                "status": "success", 
-                "file": xml_file_path, 
-                "total_faturas": json_data.get("total_faturas", 0)
-            }
+                # Se a inserção falhou, não excluir arquivo do SFTP
+                logger.error(f"❌ Falha na inserção, arquivo não será excluído do SFTP: {xml_file_path}")
+                return {
+                    "status": "error", 
+                    "file": xml_file_path, 
+                    "message": "Falha na inserção no banco de dados"
+                }
         else:
             logger.error(f"❌ Falha ao processar: {xml_file_path}")
             return {"status": "error", "file": xml_file_path, "message": "Falha na conversão XML"}
