@@ -48,10 +48,11 @@ def start_flower():
     """Inicia o Flower para monitoramento"""
     print("🌸 Iniciando Flower (monitoramento Celery)...")
     try:
-        # Comando para iniciar o Flower
+        # Comando para iniciar o Flower com o broker Redis local do docker
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
         cmd = [
             "celery", "-A", "celery_config.celery_app", 
-            "flower", "--port=5555", "--broker=redis://localhost:6379/0"
+            "flower", "--port=5555", "--broker=" + redis_url
         ]
         
         process = subprocess.Popen(cmd)
