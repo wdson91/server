@@ -4,6 +4,7 @@ import xmltodict
 import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 from celery import Celery
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -42,7 +43,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def parse_xml_to_json(xml_file_path: str) -> dict | None:
+def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
     """Converte arquivo XML para JSON"""
     try:
         logger.info(f"🔄 Processando XML: {xml_file_path}")
