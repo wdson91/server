@@ -331,8 +331,10 @@ def process_and_insert_invoice_batch(file_path: Path):
         # Preparar dados para inserção em lote
         companies_batch = []
         invoices_batch = []
-        lines_batch = []
         links_batch = []
+
+        # Armazenar linhas por fatura para inserção posterior
+        lines_by_invoice = {}
 
         for fatura in data["faturas"]:
             # Preparar empresa para lote
@@ -363,10 +365,10 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "tax_type": fatura["TaxType"]
             })
 
-            # Preparar linhas para lote
+            # Armazenar linhas por fatura (não inserir ainda)
+            lines_by_invoice[fatura["InvoiceNo"]] = []
             for linha in fatura["Lines"]:
-                lines_batch.append({
-                    "invoice_id": None,  # Será atualizado após inserção das faturas
+                lines_by_invoice[fatura["InvoiceNo"]].append({
                     "line_number": linha["LineNumber"],
                     "product_code": linha["ProductCode"],
                     "description": linha["Description"],
@@ -391,30 +393,42 @@ def process_and_insert_invoice_batch(file_path: Path):
             for invoice in invoices_response.data:
                 invoice_mapping[invoice["invoice_no"]] = invoice["id"]
 
-            # Atualizar invoice_id nas linhas
-            for i, fatura in enumerate(data["faturas"]):
+            # Preparar linhas apenas para faturas inseridas com sucesso
+            lines_batch = []
+            
+            for fatura in data["faturas"]:
                 invoice_id = invoice_mapping.get(fatura["InvoiceNo"])
                 if invoice_id:
-                    # Atualizar invoice_id nas linhas correspondentes
-                    start_idx = i * len(fatura["Lines"])
-                    end_idx = start_idx + len(fatura["Lines"])
-                    for j in range(start_idx, end_idx):
-                        if j < len(lines_batch):
-                            lines_batch[j]["invoice_id"] = invoice_id
+                    # Adicionar linhas apenas se a fatura foi inserida com sucesso
+                    if fatura["InvoiceNo"] in lines_by_invoice:
+                        for linha in lines_by_invoice[fatura["InvoiceNo"]]:
+                            linha_with_invoice_id = linha.copy()
+                            linha_with_invoice_id["invoice_id"] = invoice_id
+                            lines_batch.append(linha_with_invoice_id)
 
                     # Adicionar link do arquivo
                     links_batch.append({
                         "invoice_file_id": file_id,
                         "invoice_id": invoice_id
                     })
+                else:
+                    logger.warning(f"⚠️ Fatura {fatura['InvoiceNo']} não foi inserida, linhas serão ignoradas")
 
-            # Inserir linhas em lote
-            logger.info(f"📋 Inserindo {len(lines_batch)} linhas de faturas...")
-            insert_invoice_lines_batch(lines_batch)
+            # Inserir linhas em lote (apenas para faturas inseridas)
+            if lines_batch:
+                logger.info(f"📋 Inserindo {len(lines_batch)} linhas de faturas...")
+                insert_invoice_lines_batch(lines_batch)
+            else:
+                logger.warning("⚠️ Nenhuma linha para inserir (faturas não foram inseridas)")
 
             # Inserir links em lote
-            logger.info(f"🔗 Inserindo {len(links_batch)} links de arquivos...")
-            insert_file_links_batch(links_batch)
+            if links_batch:
+                logger.info(f"🔗 Inserindo {len(links_batch)} links de arquivos...")
+                insert_file_links_batch(links_batch)
+            else:
+                logger.warning("⚠️ Nenhum link para inserir (faturas não foram inseridas)")
+        else:
+            logger.error("❌ Falha ao inserir faturas, linhas não serão inseridas")
 
         logger.info(f"✅ Arquivo processado com sucesso: {file_path}")
                 
