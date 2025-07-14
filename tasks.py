@@ -399,18 +399,31 @@ def process_and_insert_invoice_batch(file_path: Path):
             for fatura in data["faturas"]:
                 invoice_id = invoice_mapping.get(fatura["InvoiceNo"])
                 if invoice_id:
-                    # Adicionar linhas apenas se a fatura foi inserida com sucesso
+                    # Verificar se já existem linhas para esta fatura
+                    existing_lines = supabase.table("invoice_lines").select("line_number").eq("invoice_id", invoice_id).execute()
+                    existing_line_numbers = {line["line_number"] for line in existing_lines.data} if existing_lines.data else set()
+                    
+                    # Adicionar linhas apenas se a fatura foi inserida com sucesso E se não existem linhas duplicadas
                     if fatura["InvoiceNo"] in lines_by_invoice:
                         for linha in lines_by_invoice[fatura["InvoiceNo"]]:
-                            linha_with_invoice_id = linha.copy()
-                            linha_with_invoice_id["invoice_id"] = invoice_id
-                            lines_batch.append(linha_with_invoice_id)
+                            # Verificar se esta linha já existe
+                            if linha["line_number"] not in existing_line_numbers:
+                                linha_with_invoice_id = linha.copy()
+                                linha_with_invoice_id["invoice_id"] = invoice_id
+                                lines_batch.append(linha_with_invoice_id)
+                            else:
+                                logger.info(f"ℹ️ Linha {linha['line_number']} já existe para fatura {fatura['InvoiceNo']}, ignorando")
 
-                    # Adicionar link do arquivo
-                    links_batch.append({
-                        "invoice_file_id": file_id,
-                        "invoice_id": invoice_id
-                    })
+                    # Verificar se já existe link para esta fatura
+                    existing_link = supabase.table("invoice_file_links").select("id").eq("invoice_id", invoice_id).eq("invoice_file_id", file_id).execute()
+                    if not existing_link.data:
+                        # Adicionar link do arquivo apenas se não existir
+                        links_batch.append({
+                            "invoice_file_id": file_id,
+                            "invoice_id": invoice_id
+                        })
+                    else:
+                        logger.info(f"ℹ️ Link já existe para fatura {fatura['InvoiceNo']}, ignorando")
                 else:
                     logger.warning(f"⚠️ Fatura {fatura['InvoiceNo']} não foi inserida, linhas serão ignoradas")
 
