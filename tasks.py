@@ -14,7 +14,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'celery'))
 from celery_config import celery_app
-from sftp_connection import download_files_from_sftp
+from sftp_connection import download_files_from_sftp, delete_file_from_sftp
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -476,7 +476,16 @@ def process_single_xml_file(xml_file_path: str):
             # Processar e inserir no Supabase usando inserção em lote
             process_and_insert_invoice_batch(Path(json_path))
             
-            # Remover arquivos após processamento
+            # Excluir arquivo do SFTP após processamento bem-sucedido
+            logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
+            sftp_deleted = delete_file_from_sftp(xml_file_path)
+            
+            if sftp_deleted:
+                logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+            else:
+                logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
+            
+            # Remover arquivos locais após processamento
             remove_file_safely(xml_file_path, "Arquivo XML")
             remove_file_safely(json_path, "Arquivo JSON")
             
