@@ -66,9 +66,9 @@ def download_files_from_sftp():
                 arquivos_pasta = sftp.listdir(caminho_pasta_nif)
                 logger.info(f"📁 Arquivos na pasta {pasta_nif}: {arquivos_pasta}")
                 
-                # Baixar todos os arquivos XML que começam com FR
+                # Baixar todos os arquivos XML que começam com FR ou NC
                 for arquivo in arquivos_pasta:
-                    if arquivo.endswith('.xml') and arquivo.startswith('FR'):
+                    if arquivo.endswith('.xml') and (arquivo.startswith('FR') or arquivo.startswith('NC')):
                         caminho_remoto = f'{caminho_pasta_nif}/{arquivo}'
                         caminho_local = os.path.join(pasta_local, arquivo)
                         

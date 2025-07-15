@@ -11,7 +11,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'celery'))
 from celery_config import celery_app
-from tasks import download_and_queue_sftp_files, process_single_xml_file
+from tasks import download_and_queue_sftp_files, process_single_xml_file, download_and_queue_opengcs_files, process_single_opengcs_file
 
 from utils.supabaseUtil import get_supabase
 
@@ -64,6 +64,42 @@ def trigger_sftp_processing():
         return jsonify({
             "status": "error",
             "message": f"Erro ao iniciar processamento: {str(e)}"
+        }), 500
+
+# Endpoint para baixar arquivos OpenGCs SFTP e criar tarefas individuais
+@app.route('/api/download-opengcs-queue', methods=['POST'])
+def trigger_opengcs_download_and_queue():
+    """Endpoint para baixar arquivos OpenGCs SFTP e criar tarefas individuais no Celery"""
+    try:
+        # Executar tarefa Celery
+        task = download_and_queue_opengcs_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Download OpenGCs SFTP iniciado e tarefas sendo criadas",
+            "task_id": task.id
+        }), 202
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar download OpenGCs SFTP: {str(e)}"
+        }), 500
+
+# Endpoint para processar arquivos OpenGCs manualmente
+@app.route('/api/process-opengcs', methods=['POST'])
+def trigger_opengcs_processing():
+    """Endpoint para processar arquivos OpenGCs manualmente"""
+    try:
+        # Executar tarefa Celery
+        task = download_and_queue_opengcs_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Processamento OpenGCs iniciado",
+            "task_id": task.id
+        }), 202
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar processamento OpenGCs: {str(e)}"
         }), 500
 
 # Endpoint para verificar status de uma tarefa
@@ -135,6 +171,48 @@ def process_specific_xml_file():
         return jsonify({
             "status": "error",
             "message": f"Erro ao processar arquivo: {str(e)}"
+        }), 500
+
+# Endpoint específico para processar arquivos NC (Nota de Crédito)
+@app.route('/api/process-nc-file', methods=['POST'])
+def process_nc_file_endpoint():
+    """Endpoint para processar um arquivo NC específico"""
+    try:
+        data = request.get_json()
+        file_path = data.get('file_path')
+        
+        if not file_path:
+            return jsonify({
+                "status": "error",
+                "message": "file_path é obrigatório"
+            }), 400
+        
+        if not os.path.exists(file_path):
+            return jsonify({
+                "status": "error",
+                "message": "Arquivo não encontrado"
+            }), 404
+        
+        # Verificar se é um arquivo NC
+        filename = os.path.basename(file_path)
+        if not filename.startswith('NC'):
+            return jsonify({
+                "status": "error",
+                "message": "Arquivo deve começar com 'NC' para ser processado como Nota de Crédito"
+            }), 400
+        
+        # Executar tarefa Celery
+        task = process_single_xml_file.delay(file_path)
+        return jsonify({
+            "status": "success",
+            "message": "Processamento de arquivo NC iniciado",
+            "task_id": task.id
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao processar arquivo NC: {str(e)}"
         }), 500
 
 # Endpoint para listar tarefas ativas
