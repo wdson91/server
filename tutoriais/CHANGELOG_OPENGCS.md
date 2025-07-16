@@ -15,8 +15,25 @@
   ```sql
   CREATE TABLE open_gcs_json (
     loja_id text primary key,
+    nif text,
+    filial text,
     data jsonb not null,
     updated_at timestamptz default now()
+  );
+  ```
+- **Lógica de Inserção/Atualização**: Busca por NIF e Filial, atualiza se existir ou insere novo registro
+- Nova tabela `filiais` no Supabase:
+  ```sql
+  CREATE TABLE filiais (
+    filial_id TEXT PRIMARY KEY,
+    filial_number TEXT UNIQUE,
+    company_id TEXT REFERENCES companies(company_id) ON DELETE CASCADE,
+    nome TEXT NOT NULL,
+    endereco TEXT,
+    cidade TEXT,
+    codigo_postal TEXT,
+    pais TEXT,
+    created_at TIMESTAMP DEFAULT now()
   );
   ```
 
@@ -36,8 +53,11 @@
 - `delete_opengcs_file_from_sftp()`: Exclui arquivos após processamento
 - `parse_opengcs_xml_to_json()`: Converte XML para JSON
 - `extract_nif_from_filename()`: Extrai NIF do nome do arquivo
+- `extract_filial_from_filename()`: Extrai filial do nome do arquivo (Faturas)
+- `extract_opengcs_filial_from_filename()`: Extrai filial do nome do arquivo (OpenGCs)
 - `insert_opengcs_to_supabase()`: Insere dados no Supabase
 - `read_xml_file_with_encoding()`: Lê arquivos XML com múltiplas codificações
+- `insert_filiais_batch()`: Insere filiais em lote
 
 #### Processamento de Dados
 - Extração de `OpenGCsTotal` e `OpenGCs` do XML
@@ -45,6 +65,8 @@
 - Conversão de tipos (string para int/float)
 - Tratamento de campos opcionais
 - **Suporte a múltiplas codificações**: UTF-8, Latin-1, ISO-8859-1, CP1252
+- **Processamento de filiais**: Extração e inserção de dados de filiais das faturas
+- **Extração de filial do nome do arquivo**: Padrão `FR{ano}Y{ano}_{numero}-{filial}.xml` (remove .xml automaticamente)
 
 ### 📁 Estrutura de Arquivos
 
@@ -158,6 +180,12 @@ MAX_FILES_PER_BATCH=50  # Limite de arquivos por lote
 1. **Tabela obrigatória**: A tabela `open_gcs_json` deve existir no Supabase
 2. **Credenciais SFTP**: Configuradas no código (não via env)
 3. **Timezone**: Usa timezone do servidor
+
+#### Correções Implementadas
+1. **Erro de Constraint**: Corrigido erro "no unique or exclusion constraint matching the ON CONFLICT specification"
+   - **Problema**: Tentativa de usar `nif` como chave de conflito sem constraint único
+   - **Solução**: Implementada lógica de busca por NIF e Filial, seguida de update ou insert
+   - **Resultado**: Sistema agora busca registros existentes e atualiza dados ou insere novos registros corretamente
 
 #### Workarounds
 1. Criar tabela manualmente no Supabase

@@ -61,27 +61,29 @@ def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> O
     logger.error(f"❌ Não foi possível ler o arquivo {file_type} com nenhuma codificação: {encodings}")
     return None
 
-def extract_filial_from_invoice_no(invoice_no: str) -> str:
-    """Extrai a filial do número da fatura (valor entre FR e Y)"""
+def extract_filial_from_filename(filename: str) -> str:
+    """Extrai a filial do nome do arquivo (ex: FR202Y2025_7-Gramido -> Gramido)"""
     try:
-        if not invoice_no:
+        if not filename:
             return ""
         
-        # Procurar por padrão FR + espaço + números + Y
+        # Procurar por padrão FR + números + Y + números + _ + números + - + nome_filial
         import re
-        pattern = r'FR\s+(\d+)Y'
-        match = re.search(pattern, invoice_no)
+        pattern = r'FR\d+Y\d+_\d+-(.+)'
+        match = re.search(pattern, filename)
         
         if match:
             filial = match.group(1)
-            logger.info(f"✅ Filial extraída: {filial} do número: {invoice_no}")
+            # Remover extensão .xml se existir
+            filial = filial.replace('.xml', '')
+            logger.info(f"✅ Filial extraída: {filial} do arquivo: {filename}")
             return filial
         else:
-            logger.warning(f"⚠️ Padrão de filial não encontrado em: {invoice_no}")
+            logger.warning(f"⚠️ Padrão de filial não encontrado em: {filename}")
             return ""
             
     except Exception as e:
-        logger.error(f"❌ Erro ao extrair filial de {invoice_no}: {str(e)}")
+        logger.error(f"❌ Erro ao extrair filial de {filename}: {str(e)}")
         return ""
 
 def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
@@ -121,7 +123,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             "AddressDetail": "",
             "City": "",
             "PostalCode": "",
-            "Country": ""
+            "Country": "",
+            "SoftwareCertificateNumber": ""
         }
         
         if 'Header' in audit_file:
@@ -132,7 +135,9 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "AddressDetail": header.get('CompanyAddress', {}).get('AddressDetail', ''),
                 "City": header.get('CompanyAddress', {}).get('City', ''),
                 "PostalCode": header.get('CompanyAddress', {}).get('PostalCode', ''),
-                "Country": header.get('CompanyAddress', {}).get('Country', '')
+                "Country": header.get('CompanyAddress', {}).get('Country', ''),
+                "SoftwareCertificateNumber": header.get('SoftwareCertificateNumber', '')
+               
             }
             logger.info(f"✅ Dados da empresa extraídos do Header")
         
@@ -173,9 +178,9 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 line_data = line_data[0] if line_data else {}
             tax_data = line_data.get('Tax', {})
             
-            # Extrair filial do número da fatura
-            invoice_no = invoice.get('InvoiceNo', '')
-            filial = extract_filial_from_invoice_no(invoice_no)
+            # Extrair filial do nome do arquivo
+            filename = os.path.basename(xml_file_path)
+            filial = extract_filial_from_filename(filename)
             
             fatura = {
                 "CompanyID": company_data["CompanyID"],
@@ -184,7 +189,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "City": company_data["City"],
                 "PostalCode": company_data["PostalCode"],
                 "Country": company_data["Country"],
-                "InvoiceNo": invoice_no,
+                "CertificateNumber": company_data["SoftwareCertificateNumber"],
+                "InvoiceNo": invoice.get('InvoiceNo', ''),
                 "Filial": filial,  # Novo campo filial
                 "ATCUD": invoice.get('ATCUD', ''),
                 "CustomerID": invoice.get('CustomerID', ''),
@@ -198,6 +204,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "GrossTotal": float(document_totals.get('GrossTotal', 0)),
                 "PaymentAmount": float(payment.get('PaymentAmount', 0)),
                 "TaxType": tax_data.get('TaxType', ''),
+                
                 "Lines": []
             }
             
@@ -214,7 +221,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                         "UnitPrice": float(line.get('UnitPrice', 0)),
                         "CreditAmount": float(line.get('CreditAmount', 0)),
                         "TaxPercentage": float(line_tax.get('TaxPercentage', 0)),
-                        "PriceWithIva": float(line.get('CreditAmount', 0))  # Usar CreditAmount como PriceWithIva
+                        # Calcular PriceWithIva com base no CreditAmount + TaxPercentage %
+                        "PriceWithIva": (float(line.get('CreditAmount', 0)) * (1 + float(line_tax.get('TaxPercentage', 0)) / 100)) # Usar CreditAmount como PriceWithIva
                     })
             
             saft_data["faturas"].append(fatura)
@@ -254,8 +262,35 @@ def insert_companies_batch(companies_data):
         logger.error(f"❌ Erro ao inserir empresas em lote: {str(e)}")
         return None
 
+def insert_filiais_batch(filiais_data):
+    """Insere filiais em lote"""
+    try:
+        if not filiais_data:
+            logger.warning("⚠️ Nenhuma filial para inserir")
+            return None
+        
+        logger.info(f"🏪 Tentando inserir {len(filiais_data)} filiais...")
+        
+        # Usar upsert para evitar duplicatas baseado no filial_number que é único
+        response = supabase.table("filiais").upsert(
+            filiais_data,
+            on_conflict="filial_number"
+        ).execute()
+        
+        if response.data:
+            logger.info(f"✅ {len(response.data)} filiais inseridas/atualizadas")
+        else:
+            logger.warning("⚠️ Nenhuma filial foi inserida")
+            
+        return response
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao inserir filiais em lote: {str(e)}")
+        return None
+
 def insert_invoices_batch(invoices_data):
     """Insere faturas em lote"""
+    print(invoices_data)
     try:
         if not invoices_data:
             logger.warning("⚠️ Nenhuma fatura para inserir")
@@ -502,6 +537,7 @@ def process_and_insert_invoice_batch(file_path: Path):
 
         # Preparar dados para inserção em lote
         companies_batch = []
+        filiais_batch = []
         invoices_batch = []
         links_batch = []
 
@@ -519,6 +555,19 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "country": fatura["Country"]
             })
 
+            # Preparar filial para lote (se filial existir)
+            if fatura["Filial"]:
+                filiais_batch.append({
+                    "filial_id": fatura["Filial"],
+                    "filial_number": fatura["Filial"],  # Campo único
+                    "company_id": fatura["CompanyID"],
+                    "nome": f"{fatura['CompanyName']}",
+                    "endereco": fatura["AddressDetail"],
+                    "cidade": fatura["City"],
+                    "codigo_postal": fatura["PostalCode"],
+                    "pais": fatura["Country"]
+                })
+
             # Preparar fatura para lote
             invoices_batch.append({
                 "invoice_no": fatura["InvoiceNo"],
@@ -532,6 +581,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "hash_extract": fatura["HashExtract"],
                 "end_date": fatura["EndDate"] if fatura["EndDate"] else None,
                 "tax_payable": fatura["TaxPayable"],
+                "certificate_number": fatura["CertificateNumber"],
                 "net_total": fatura["NetTotal"],
                 "gross_total": fatura["GrossTotal"],
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
@@ -555,6 +605,11 @@ def process_and_insert_invoice_batch(file_path: Path):
         # Inserir empresas em lote
         logger.info(f"🏢 Inserindo {len(companies_batch)} empresas...")
         insert_companies_batch(companies_batch)
+
+        # Inserir filiais em lote
+        if filiais_batch:
+            logger.info(f"🏪 Inserindo {len(filiais_batch)} filiais...")
+            insert_filiais_batch(filiais_batch)
 
         # Inserir faturas em lote
         logger.info(f"📄 Inserindo {len(invoices_batch)} faturas...")
@@ -902,18 +957,54 @@ def parse_opengcs_xml_to_json(xml_file_path: str) -> Optional[dict]:
         return None
 
 def extract_nif_from_filename(filename: str) -> str:
-    """Extrai o NIF do nome do arquivo opengcs-{nif}"""
+    """Extrai o NIF do nome do arquivo opengcs-{nif}-{filial}"""
     try:
-        # Padrão: opengcs-{nif}
+        # Padrão: opengcs-{nif}-{filial}
         if filename.startswith('opengcs-'):
-            nif = filename[8:]  # Remove 'opengcs-' do início
-            logger.info(f"✅ NIF extraído: {nif} do arquivo: {filename}")
-            return nif
+            # Remove 'opengcs-' do início
+            remaining = filename[8:]
+            # Extrai NIF (tudo até o primeiro hífen)
+            if '-' in remaining:
+                nif = remaining.split('-')[0]
+                logger.info(f"✅ NIF extraído: {nif} do arquivo: {filename}")
+                return nif
+            else:
+                logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
+                return ""
         else:
             logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
             return ""
     except Exception as e:
         logger.error(f"❌ Erro ao extrair NIF de {filename}: {str(e)}")
+        return ""
+
+def extract_opengcs_filial_from_filename(filename: str) -> str:
+    """Extrai a filial do nome do arquivo opengcs-{nif}-{filial}"""
+    try:
+        # Padrão: opengcs-{nif}-{filial}
+        if filename.startswith('opengcs-'):
+            # Remove 'opengcs-' do início
+            remaining = filename[8:]
+            # Extrai filial (tudo após o segundo hífen)
+            if '-' in remaining:
+                parts = remaining.split('-')
+                if len(parts) >= 2:
+                    filial = parts[1]
+                    # Remove extensão .xml se existir
+                    filial = filial.replace('.xml', '')
+                    logger.info(f"✅ Filial OpenGCs extraída: {filial} do arquivo: {filename}")
+                    return filial
+                else:
+                    logger.warning(f"⚠️ Padrão de filial OpenGCs não reconhecido: {filename}")
+                    return ""
+            else:
+                logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
+                return ""
+        else:
+            logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
+            return ""
+    except Exception as e:
+        logger.error(f"❌ Erro ao extrair filial OpenGCs de {filename}: {str(e)}")
         return ""
 
 def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
@@ -923,36 +1014,59 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
             logger.warning("⚠️ Nenhum dado OpenGCs para inserir")
             return False
         
-        # Extrair NIF do nome do arquivo
+        # Extrair NIF e filial do nome do arquivo
         filename = os.path.basename(xml_file_path)
-        # remover o .xml do nome do arquivo
-        loja_id = extract_nif_from_filename(filename).replace('.xml', '')
+        nif = extract_nif_from_filename(filename)
+        filial = extract_opengcs_filial_from_filename(filename)
         
-        if not loja_id:
+        if not nif:
             logger.error(f"❌ Não foi possível extrair NIF do arquivo: {filename}")
             return False
         
-        logger.info(f"🏪 Inserindo dados OpenGCs para loja: {loja_id}")
+        logger.info(f"🏪 Inserindo dados OpenGCs para NIF: {nif}, filial: {filial}")
         
-        # Preparar dados para inserção
-        data_to_insert = {
-            "loja_id": loja_id,
-            "data": opengcs_data,
-            "updated_at": datetime.now().isoformat()
-        }
+        # Verificar se já existe um registro com este NIF e filial
+        existing_record = supabase.table("open_gcs_json").select("loja_id").eq("nif", nif).eq("filial", filial).execute()
         
-        # Usar upsert para atualizar se já existir
-        response = supabase.table("open_gcs_json").upsert(
-            data_to_insert,
-            on_conflict="loja_id"
-        ).execute()
-        
-        if response.data:
-            logger.info(f"✅ Dados OpenGCs inseridos/atualizados para loja: {loja_id}")
-            return True
+        if existing_record.data:
+            # Atualizar registro existente
+            loja_id = existing_record.data[0]["loja_id"]
+            logger.info(f"🔄 Atualizando registro existente com loja_id: {loja_id}")
+            
+            response = supabase.table("open_gcs_json").update({
+                "data": opengcs_data,
+                "updated_at": datetime.now().isoformat()
+            }).eq("loja_id", loja_id).execute()
+            
+            if response.data:
+                logger.info(f"✅ Dados OpenGCs atualizados para NIF: {nif}, filial: {filial}")
+                return True
+            else:
+                logger.warning("⚠️ Falha ao atualizar dados OpenGCs")
+                return False
         else:
-            logger.warning("⚠️ Nenhum dado OpenGCs foi inserido")
-            return False
+            # Inserir novo registro
+            logger.info(f"🆕 Inserindo novo registro para NIF: {nif}, filial: {filial}")
+            
+            # Gerar loja_id único (usar NIF + filial como identificador)
+            loja_id = f"{nif}_{filial}" if filial else nif
+            
+            data_to_insert = {
+                "loja_id": loja_id,
+                "nif": nif,
+                "filial": filial,
+                "data": opengcs_data,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            response = supabase.table("open_gcs_json").insert(data_to_insert).execute()
+            
+            if response.data:
+                logger.info(f"✅ Dados OpenGCs inseridos para NIF: {nif}, filial: {filial}")
+                return True
+            else:
+                logger.warning("⚠️ Nenhum dado OpenGCs foi inserido")
+                return False
             
     except Exception as e:
         logger.error(f"❌ Erro ao inserir dados OpenGCs: {str(e)}")
@@ -978,13 +1092,13 @@ def process_single_opengcs_file(xml_file_path: str):
             
             if insertion_success:
                 # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
-                logger.info(f"🗑️ Excluindo arquivo OpenGCs do SFTP após processamento bem-sucedido: {xml_file_path}")
-                sftp_deleted = delete_opengcs_file_from_sftp(xml_file_path)
+                # logger.info(f"🗑️ Excluindo arquivo OpenGCs do SFTP após processamento bem-sucedido: {xml_file_path}")
+                # sftp_deleted = delete_opengcs_file_from_sftp(xml_file_path)
                 
-                if sftp_deleted:
-                    logger.info(f"✅ Arquivo OpenGCs excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
-                else:
-                    logger.warning(f"⚠️ Falha ao excluir arquivo OpenGCs do SFTP: {os.path.basename(xml_file_path)}")
+                # if sftp_deleted:
+                #     logger.info(f"✅ Arquivo OpenGCs excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                # else:
+                #     logger.warning(f"⚠️ Falha ao excluir arquivo OpenGCs do SFTP: {os.path.basename(xml_file_path)}")
                 
                 # Remover arquivo local após processamento bem-sucedido
                 remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
