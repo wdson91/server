@@ -7,3 +7,5 @@ faturas.py
 *.pyc
 resumo.md
 .vercel
+downloads/
+dados_processados/

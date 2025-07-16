@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery-worker:
+    build: .
+    command: celery -A celery.celery_config.celery_app worker --loglevel=info --concurrency=4
+    volumes:
+      - ./downloads:/app/downloads
+      - ./dados_processados:/app/dados_processados
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "celery", "-A", "celery.celery_config.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery-beat:
+    build: .
+    command: celery -A celery.celery_config.celery_app beat --loglevel=info
+    volumes:
+      - ./downloads:/app/downloads
+      - ./dados_processados:/app/dados_processados
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  flower:
+    build: .
+    command: celery -A celery.celery_config.celery_app flower --port=5555 --broker=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  flask-app:
+    build: .
+    command: python main.py
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./dados_processados:/app/dados_processados
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data: 

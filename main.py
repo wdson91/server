@@ -1,534 +1,298 @@
-from flask import Flask, request, jsonify
-from datetime import date, datetime
-import requests
-from sqlalchemy import text
-# carrrega as variáveis de ambiente do arquivo .env
-from dotenv import load_dotenv
-from decorator import require_valid_token
-from utils.supabaseUtil import get_supabase
-from collections import defaultdict
+from flask import Flask, request, jsonify,send_file
+from datetime import datetime, date, timedelta
+import os
 import pytz
-from datetime import timedelta
-load_dotenv()
+from flask_cors import CORS
+from dotenv import load_dotenv
 from flask_caching import Cache
-from threading import Thread
-import requests
-from getFaturas import get_faturas
+
+# Importar Celery
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'celery'))
+from celery_config import celery_app
+from tasks import download_and_queue_sftp_files, process_single_xml_file, download_and_queue_opengcs_files, process_single_opengcs_file
+
+from utils.supabaseUtil import get_supabase
+
+# Configuração
+load_dotenv()
 app = Flask(__name__)
+CORS(app)
 
-cache = Cache(app, config={
-    "CACHE_TYPE": "RedisCache",
-    "CACHE_REDIS_URL": "redis://localhost:6379/0",  # ajuste se necessário
-    "CACHE_DEFAULT_TIMEOUT": 180  # 5 minutos
+
+app.config.from_mapping({
+    'CACHE_TYPE': 'RedisCache',
+    'CACHE_REDIS_URL': os.getenv('REDIS_URL'),
+    'CACHE_DEFAULT_TIMEOUT': 180,
 })
+cache = Cache(app)
 supabase = get_supabase()
+TZ = pytz.timezone('Europe/Lisbon')
 
-
-
-def precache_essenciais(nif, token):
-    rotas = [
-        f"http://localhost:8000/api/stats?nif={nif}",
-        f"http://localhost:8000/api/stats/resumo?nif={nif}&periodo=0",
-        f"http://localhost:8000/api/products?nif={nif}&periodo=0",
-        f"http://localhost:8000/api/products?nif={nif}&periodo=1"
-    ]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    for rota in rotas:
-        try:
-            requests.get(rota, headers=headers, timeout=10)
-        except Exception as e:
-            print(f"[PreCache] Erro ao acessar {rota}: {e}")
-
-    # Armazena o horário da atualização no Redis
-    tz = pytz.timezone("Europe/Lisbon")
-    agora = datetime.now(tz).strftime("%d-%m %H:%M")
-    cache.set(f"ultima_atualizacao:{nif}", agora)
-
-def cache_key():
-    nif = request.args.get("nif", "")
-    periodo_raw = request.args.get("periodo", "0")
-
+# Endpoint para baixar arquivos SFTP e criar tarefas individuais
+@app.route('/api/download-sftp-queue', methods=['POST'])
+def trigger_sftp_download_and_queue():
+    """Endpoint para baixar arquivos SFTP e criar tarefas individuais no Celery"""
     try:
-        periodo = int(periodo_raw)
-    except ValueError:
-        periodo = 0  # valor padrão ou pode levantar erro/logar
-    rota = request.path  # ex: "/api/products"
-    return f"{rota}/{nif}/{periodo}"
-
-
-
-
-@app.route("/api/stats", methods=["GET"])
-@require_valid_token
-def relatorio():
-    return get_faturas()
-
-def marcar_atualizacao_cache(nif):
-    tz = pytz.timezone("Europe/Lisbon")
-    agora = datetime.now(tz).strftime("%d-%m %H:%M")
-    cache.set(f"ultima_atualizacao:{nif}", agora)
-
-@app.route("/api/stats/today", methods=["GET"])
-@require_valid_token
-@cache.cached(timeout=180, key_prefix=cache_key)
-def stats():
-
-    nif = request.args.get("nif")
-    #nif = '514757876'
-    if not nif or not nif.isdigit():
-        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
-
-    hoje = date.today()
-    tz = pytz.timezone("Europe/Lisbon")
-
-    
-    # Consulta bruta no Supabase
-    result_today = supabase.table("faturas_fatura") \
-        .select("*, itens:faturas_itemfatura(*)") \
-        .eq('nif', nif) \
-        .eq("data", hoje.isoformat()) \
-       .execute()
-    
-    faturas_raw = result_today.data or []
-    # ✅ Reforça o filtro manual em Python
-    faturas = [f for f in faturas_raw if str(f.get("nif")) == nif]
-    
-    # Estatísticas de hoje
-    total_vendas = sum(float(f["total"]) for f in faturas)
-    total_itens = sum(
-        item["quantidade"]
-        for f in faturas
-        for item in (f.get("itens") or [])
-    )
-
-    contagem_produtos = defaultdict(int)
-    for f in faturas:
-        for item in (f.get("itens") or []):
-            contagem_produtos[item["nome"]] += item["quantidade"]
-
-    produtos = sorted(
-        [{"produto": nome, "quantidade": qtd} for nome, qtd in contagem_produtos.items()],
-        key=lambda x: x["quantidade"],
-        reverse=True
-    )
-
-    vendas_por_hora_real = defaultdict(float)
-    for f in faturas:
-        hora_str = f.get("hora", "")
-        if hora_str:
-            hora_formatada = hora_str[:2] + ":00"
-            vendas_por_hora_real[hora_formatada] += float(f["total"])
-
-    horas_base = {"08:00", "12:00", "18:00"} | set(vendas_por_hora_real.keys())
-    vendas_horarias = [
-        {"hora": hora, "total": round(vendas_por_hora_real.get(hora, 0.0), 2)}
-        for hora in sorted(horas_base)
-    ]
-
-    # Marca o momento da atualização
-    agora = datetime.now(tz)
-    ultima_atualizacao = agora.strftime("%H:%M")
-
-    # Faturas últimos 7 dias até ontem
-    ontem = hoje - timedelta(days=1)
-    sete_dias_atras = hoje - timedelta(days=7)
-    result_7 = supabase.table("faturas_fatura") \
-        .select("data, total") \
-        .gte("data", sete_dias_atras.isoformat()) \
-        .lte("data", ontem.isoformat()) \
-        .execute()
-    faturas_7 = result_7.data or []
-
-    vendas_ultimos_7 = defaultdict(float)
-    for f in faturas_7:
-        vendas_ultimos_7[f["data"]] += float(f["total"])
-
-    vendas_por_dia_ultimos_7 = [
-        {"data": dia, "total": round(total, 2)}
-        for dia, total in sorted(vendas_ultimos_7.items())
-    ]
-    total_ultimos_7 = round(sum(float(f["total"]) for f in faturas_7), 2)
-
-    resultado = {
-        "dados": {
-            "total_vendas": round(total_vendas, 2),
-            "total_itens": total_itens,
-            "vendas_por_dia": [{"data": str(hoje), "total": round(total_vendas, 2)}],
-            "vendas_por_hora": vendas_horarias,
-            "vendas_por_produto": produtos,
-            "quantidade_faturas": len(faturas),
-            "filtro_data": str(hoje),
-            "ultima_atualizacao": ultima_atualizacao,
-            "ultimos_7_dias": vendas_por_dia_ultimos_7,
-            "total_ultimos_7_dias": total_ultimos_7,
-        }
-    }
-
-    return jsonify(resultado), 200
-
-@app.route("/api/stats/report", methods=["GET"])
-@require_valid_token
-@cache.cached(timeout=180, key_prefix=cache_key)
-def faturas_agrupadas_view():
-    nif = request.args.get("nif")
-    if not nif:
-        return jsonify({"error": "NIF é obrigatório"}), 400
-
-    hoje = date.today()
-    sete_dias_atras = hoje - timedelta(days=7)
-    ontem = hoje - timedelta(days=1)
-    tz = pytz.timezone("Europe/Lisbon")
-    agora = datetime.now(tz)
-
-    # Faturas de hoje com filtro por NIF
-    result_hoje = supabase.table("faturas_fatura") \
-        .select("*") \
-        .eq("data", hoje.isoformat()) \
-        .eq("nif", nif) \
-        .execute()
-
-    # Faturas dos últimos 7 dias (excluindo hoje)
-    result_7_dias = supabase.table("faturas_fatura") \
-        .select("*") \
-        .gte("data", sete_dias_atras.isoformat()) \
-        .lte("data", ontem.isoformat()) \
-        .eq("nif", nif) \
-        .execute()
-
-    faturas_hoje = result_hoje.data or []
-    faturas_7_dias = result_7_dias.data or []
-
-    if not faturas_hoje and not faturas_7_dias:
-        return jsonify({"message": "Nenhuma fatura encontrada para o NIF informado."}), 404
-
-    def agrupar_por_hora(faturas):
-        agrupado = defaultdict(lambda: {"volume": 0.0, "quantidade": 0})
-        for f in faturas:
-            hora_str = f.get("hora")
-            if not hora_str:
-                continue
-            hora_formatada = datetime.strptime(hora_str, "%H:%M:%S").strftime("%H:00")
-            agrupado[hora_formatada]["volume"] += float(f.get("total", 0))
-            agrupado[hora_formatada]["quantidade"] += 1
-        return agrupado
-
-    totais_hoje = agrupar_por_hora(faturas_hoje)
-    totais_7_dias = agrupar_por_hora(faturas_7_dias)
-
-    horas_com_dados = set(totais_hoje.keys()) | set(totais_7_dias.keys())
-    vendas_por_hora_formatado = []
-    for hora in sorted(horas_com_dados):
-        vendas_por_hora_formatado.append({
-            "hora": hora,
-            "faturas_hoje": totais_hoje.get(hora, {}).get("quantidade", 0),
-            "volume_hoje": round(totais_hoje.get(hora, {}).get("volume", 0), 2),
-            "faturas_7_dias": totais_7_dias.get(hora, {}).get("quantidade", 0),
-            "volume_7_dias": round(totais_7_dias.get(hora, {}).get("volume", 0), 2)
-        })
-
-    total_vendas_hoje = round(sum(float(f.get("total", 0)) for f in faturas_hoje), 2)
-    quantidade_faturas_hoje = len(faturas_hoje)
-
-    # Vendas por dia - hoje
-    vendas_por_dia = [{
-        "data": hoje.strftime("%Y-%m-%d"),
-        "total": total_vendas_hoje
-    }]
-
-    # Vendas últimos 7 dias (agrupar por data)
-    vendas_7_dias_dict = defaultdict(float)
-    for f in faturas_7_dias:
-        data_f = f["data"]
-        vendas_7_dias_dict[data_f] += float(f.get("total", 0))
-
-    ultimos_7_dias = [
-        {"data": data, "total": round(total, 2)}
-        for data, total in sorted(vendas_7_dias_dict.items())
-    ]
-    total_ultimos_7_dias = round(sum(v["total"] for v in ultimos_7_dias), 2)
-
-    resposta = {
-        "dados": {
-            "total_vendas": total_vendas_hoje,
-            "quantidade_faturas": quantidade_faturas_hoje,
-            "vendas_por_dia": vendas_por_dia,
-            "vendas_por_hora": vendas_por_hora_formatado,
-            "filtro_data": hoje.strftime("%Y-%m-%d"),
-            "ultima_atualizacao": agora.strftime("%H:%M"),
-            "ultimos_7_dias": ultimos_7_dias,
-            "total_ultimos_7_dias": total_ultimos_7_dias,
-            "quantidade_faturas_7_dias": len(faturas_7_dias),
-        }
-    }
-    marcar_atualizacao_cache(nif)
-
-    return jsonify(resposta)
-
-
-@app.route("/api/products", methods=["GET"])
-@require_valid_token
-@cache.cached(timeout=180, key_prefix=cache_key)
-def mais_vendidos():
-    nif = request.args.get("nif")
-    if not is_valid_nif(nif):
-        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
-
-    try:
-        periodo = int(request.args.get("periodo", 0))  # 0 = hoje, 1 = ontem, etc.
-    except ValueError:
-        return jsonify({"error": "Período inválido. Deve ser um número inteiro de 0 a 5."}), 400
-
-    try:
-        data_inicio, data_fim, _, _ = get_periodo_datas(periodo)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    faturas = buscar_faturas_periodo(nif, data_inicio, data_fim)
-
-    contagem_produtos = defaultdict(lambda: {"quantidade": 0, "montante": 0.0})
-    total_itens = 0
-    total_montante = 0.0
-
-    for f in faturas:
-        for item in (f.get("itens") or []):
-            nome = item.get("nome")
-            qtd = item.get("quantidade", 0)
-            preco_unitario = float(item.get("preco_unitario", 0.0))
-
-            contagem_produtos[nome]["quantidade"] += qtd
-            contagem_produtos[nome]["montante"] += qtd * preco_unitario
-
-            total_itens += qtd
-            total_montante += qtd * preco_unitario
-
-    itens_formatados = sorted([
-        {
-            "produto": nome,
-            "quantidade": dados["quantidade"],
-            "montante": round(dados["montante"], 2),
-            "porcentagem_montante": round((dados["montante"] / total_montante) * 100, 2) if total_montante else 0.0
-        }
-        for nome, dados in contagem_produtos.items()
-    ], key=lambda x: x["montante"], reverse=True)
-
-    resultado = {
-        
-            "periodo": parse_periodo(periodo),
-            "data_inicio": str(data_inicio),
-            "data_fim": str(data_fim),
-            "total_itens": total_itens,
-            "total_montante": round(total_montante, 2),
-            "itens": itens_formatados
-        
-    }
-    marcar_atualizacao_cache(nif)
-
-    return jsonify(resultado), 200
-
-
-@app.route("/api/limparcache", methods=["DELETE"])
-@require_valid_token
-def limpar_cache():
-    """
-    Limpa o cache de um NIF específico e recarrega os dados.
-    """
-    nif = request.args.get("nif")
-    if not nif:
-        return jsonify({"error": "NIF é obrigatório"}), 400
-
-    try:
-        # Limpa tudo relacionado ao NIF no Redis
-        limpar_cache_por_nif(nif)
-
-        # Dispara recacheamento em background
-        token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        Thread(target=precache_essenciais, args=(nif, token)).start()
-
-        return jsonify({"message": "Cache limpo e atualização em background iniciada"}), 200
+        # Executar tarefa Celery
+        task = download_and_queue_sftp_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Download SFTP iniciado e tarefas sendo criadas",
+            "task_id": task.id
+        }), 202
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar download SFTP: {str(e)}"
+        }), 500
 
-@app.route("/api/ultima-atualizacao", methods=["GET"])
-@require_valid_token
-def ultima_atualizacao():
-    nif = request.args.get("nif")
-    if not nif:
-        return jsonify({"error": "NIF é obrigatório"}), 400
-    agora = datetime.now(pytz.timezone("Europe/Lisbon")).strftime("%d-%m %H:%M")
-    ultima = cache.get(f"ultima_atualizacao:{nif}")
-    
-    return jsonify({"nif": nif, "ultima_atualizacao": ultima or agora}), 200
-
-
-from utils.utils import *
-
-@app.route("/api/stats/resumo", methods=["GET"])
-#@require_valid_token
-#@cache.cached(timeout=180, key_prefix=cache_key)
-def resumo_stats():
-    nif = request.args.get("nif")
-    periodo = int(request.args.get("periodo", 0))
-    print(f"Periodo: {periodo}")
-    if not is_valid_nif(nif):
-        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
-
+# Endpoint para processar arquivos SFTP manualmente (mantido para compatibilidade)
+@app.route('/api/process-sftp', methods=['POST'])
+def trigger_sftp_processing():
+    """Endpoint para processar arquivos SFTP manualmente"""
     try:
-        data_inicio, data_fim, data_inicio_anterior, data_fim_anterior = get_periodo_datas(periodo)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    faturas_atual = buscar_faturas_periodo(nif, data_inicio, data_fim)
-    faturas_anterior = buscar_faturas_periodo(nif, data_inicio_anterior, data_fim_anterior)
-
-    total_atual, recibos_atual, itens_atual, ticket_atual = calcular_stats(faturas_atual)
-    total_ant, recibos_ant, itens_ant, ticket_ant = calcular_stats(faturas_anterior)
-
-    vendas_atual_por_hora = agrupar_por_hora(faturas_atual)
-    vendas_ant_por_hora = agrupar_por_hora(faturas_anterior)
-
-    comparativo_por_hora = gerar_comparativo_por_hora(vendas_atual_por_hora, vendas_ant_por_hora)
-
-    
-
-    dados = {
-        "periodo": parse_periodo(periodo),
-        "total_vendas": calcular_variacao_dados(total_atual, total_ant),
-        "numero_recibos": calcular_variacao_dados(recibos_atual, recibos_ant),
-        
-        "itens_vendidos": calcular_variacao_dados(itens_atual, itens_ant),
-        "ticket_medio": calcular_variacao_dados(ticket_atual, ticket_ant),
-        "comparativo_por_hora": comparativo_por_hora
-    }
-    marcar_atualizacao_cache(nif)
-
-    return jsonify({"dados": dados}), 200
-
-
-from utils.parse_faturas import parse_faturas
-@app.route('/api/upload-fatura', methods=['POST'])
-def upload_fatura():
-    if 'file' not in request.files:
-        return jsonify({"erro": "Arquivo não enviado"}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"erro": "Arquivo sem nome"}), 400
-    
-    try:
-        text = file.read().decode('utf-8')
-    except UnicodeDecodeError:
-        return jsonify({'erro': 'Arquivo com codificação inválida. Use UTF-8'}), 400
-
-    try:
-        lista_faturas = parse_faturas(text)
-        if not lista_faturas:
-            return jsonify({'erro': 'Nenhuma fatura válida encontrada no arquivo'}), 400
+        # Executar tarefa Celery
+        task = download_and_queue_sftp_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Processamento SFTP iniciado",
+            "task_id": task.id
+        }), 202
     except Exception as e:
-        return jsonify({'erro': f'Erro ao processar as faturas: {str(e)}'}), 400
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar processamento: {str(e)}"
+        }), 500
 
-    faturas_criadas = []
-    erros = []
-    
-    for fatura in lista_faturas:
-        try:
-            # Valida campos obrigatórios
-            campos_obrigatorios = ['numero_fatura', 'data', 'hora', 'total', 'nif_emitente', 'nif_cliente', 'itens']
-            if any(fatura.get(campo) in [None, '', []] for campo in campos_obrigatorios):
-                erros.append({
-                    'numero_fatura': fatura.get('numero_fatura', 'desconhecido'),
-                    'erro': 'Campos obrigatórios faltando'
-                })
-                continue
+# Endpoint para baixar arquivos OpenGCs SFTP e criar tarefas individuais
+@app.route('/api/download-opengcs-queue', methods=['POST'])
+def trigger_opengcs_download_and_queue():
+    """Endpoint para baixar arquivos OpenGCs SFTP e criar tarefas individuais no Celery"""
+    try:
+        # Executar tarefa Celery
+        task = download_and_queue_opengcs_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Download OpenGCs SFTP iniciado e tarefas sendo criadas",
+            "task_id": task.id
+        }), 202
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar download OpenGCs SFTP: {str(e)}"
+        }), 500
 
-            # Prepara dados para inserção
-            numero_fatura_limpo = fatura['numero_fatura'].replace("/", "_").replace(" ", "")
-            now = datetime.utcnow().isoformat()
-            
-            # Insere fatura principal
-            res_fatura = supabase.table("faturas_fatura").insert({
-                "numero_fatura": numero_fatura_limpo,
-                "data": fatura["data"],
-                "hora": fatura["hora"],
-                "total": float(fatura["total"]),
-                "texto_original": fatura["texto_original"],
-                "texto_completo": fatura["texto_completo"],
-                "qrcode": fatura["qrcode"],
-                "nif": fatura["nif_emitente"],
-                "nif_cliente": fatura["nif_cliente"],
-                #"mesa": fatura.get("mesa"),
-                "criado_em": now,
-                "atualizado_em": now
-            }).execute()
-            if not res_fatura.data:
-                erros.append({
-                    'numero_fatura': numero_fatura_limpo,
-                    'erro': 'Falha ao inserir fatura no banco de dados'
-                })
-                continue
+# Endpoint para processar arquivos OpenGCs manualmente
+@app.route('/api/process-opengcs', methods=['POST'])
+def trigger_opengcs_processing():
+    """Endpoint para processar arquivos OpenGCs manualmente"""
+    try:
+        # Executar tarefa Celery
+        task = download_and_queue_opengcs_files.delay()
+        return jsonify({
+            "status": "success",
+            "message": "Processamento OpenGCs iniciado",
+            "task_id": task.id
+        }), 202
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao iniciar processamento OpenGCs: {str(e)}"
+        }), 500
 
-            # Insere itens da fatura
-            fatura_id = res_fatura.data[0]['id']
-            for item in fatura['itens']:
-                supabase.table("faturas_itemfatura").insert({
-                    "fatura_id": fatura_id,
-                    "nome": item["nome"],
-                    "quantidade": item["quantidade"],
-                    "preco_unitario": float(item["preco_unitario"]),
-                    "total": float(item["total"]),
-                    #"iva": item["iva"]
-                }).execute()
+# Endpoint para verificar status de uma tarefa
+@app.route('/api/task-status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    """Endpoint para verificar status de uma tarefa Celery"""
+    try:
+        task = celery_app.AsyncResult(task_id)
+        if task.state == 'PENDING':
+            response = {
+                'state': task.state,
+                'current': 0,
+                'total': 1,
+                'status': 'Task is pending...'
+            }
+        elif task.state != 'FAILURE':
+            response = {
+                'state': task.state,
+                'current': task.info.get('current', 0),
+                'total': task.info.get('total', 1),
+                'status': task.info.get('status', '')
+            }
+            if 'result' in task.info:
+                response['result'] = task.info['result']
+        else:
+            # something went wrong in the background job
+            response = {
+                'state': task.state,
+                'current': 1,
+                'total': 1,
+                'status': str(task.info),  # this is the exception raised
+            }
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao verificar status: {str(e)}"
+        }), 500
 
-            faturas_criadas.append(res_fatura.data[0])
+# Endpoint para processar um arquivo XML específico
+@app.route('/api/process-xml-file', methods=['POST'])
+def process_specific_xml_file():
+    """Endpoint para processar um arquivo XML específico"""
+    try:
+        data = request.get_json()
+        file_path = data.get('file_path')
+        
+        if not file_path:
+            return jsonify({
+                "status": "error",
+                "message": "file_path é obrigatório"
+            }), 400
+        
+        if not os.path.exists(file_path):
+            return jsonify({
+                "status": "error",
+                "message": "Arquivo não encontrado"
+            }), 404
+        
+        # Executar tarefa Celery
+        task = process_single_xml_file.delay(file_path)
+        return jsonify({
+            "status": "success",
+            "message": "Processamento de arquivo XML iniciado",
+            "task_id": task.id
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao processar arquivo: {str(e)}"
+        }), 500
 
-        except Exception as e:
-            erros.append({
-                'numero_fatura': fatura.get('numero_fatura', 'desconhecido'),
-                'erro': f'Erro ao processar fatura: {str(e)}'
+# Endpoint específico para processar arquivos NC (Nota de Crédito)
+@app.route('/api/process-nc-file', methods=['POST'])
+def process_nc_file_endpoint():
+    """Endpoint para processar um arquivo NC específico"""
+    try:
+        data = request.get_json()
+        file_path = data.get('file_path')
+        
+        if not file_path:
+            return jsonify({
+                "status": "error",
+                "message": "file_path é obrigatório"
+            }), 400
+        
+        if not os.path.exists(file_path):
+            return jsonify({
+                "status": "error",
+                "message": "Arquivo não encontrado"
+            }), 404
+        
+        # Verificar se é um arquivo NC
+        filename = os.path.basename(file_path)
+        if not filename.startswith('NC'):
+            return jsonify({
+                "status": "error",
+                "message": "Arquivo deve começar com 'NC' para ser processado como Nota de Crédito"
+            }), 400
+        
+        # Executar tarefa Celery
+        task = process_single_xml_file.delay(file_path)
+        return jsonify({
+            "status": "success",
+            "message": "Processamento de arquivo NC iniciado",
+            "task_id": task.id
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao processar arquivo NC: {str(e)}"
+        }), 500
+
+# Endpoint para listar tarefas ativas
+@app.route('/api/active-tasks', methods=['GET'])
+def get_active_tasks():
+    """Endpoint para listar tarefas ativas no Celery"""
+    try:
+        i = celery_app.control.inspect()
+        active_tasks = i.active()
+        
+        if active_tasks:
+            return jsonify({
+                "status": "success",
+                "active_tasks": active_tasks
             })
-            continue
+        else:
+            return jsonify({
+                "status": "success",
+                "message": "Nenhuma tarefa ativa",
+                "active_tasks": {}
+            })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro ao listar tarefas: {str(e)}"
+        }), 500
 
-    return jsonify({
-        "mensagem": f"{len(faturas_criadas)} fatura(s) processada(s) com sucesso",
-        "faturas": faturas_criadas,
-        "erros": erros
-    }), 201 if faturas_criadas else 400
-
-@app.route("/api/faturas", methods=["GET"])
-@require_valid_token
-def buscar_faturas_periodo_route():
-    nif = request.args.get("nif")
-    periodo_raw = request.args.get("periodo", "0")
-
-    if not nif or not nif.isdigit():
-        return jsonify({"error": "NIF é obrigatório e deve conter apenas números"}), 400
-
+# Endpoint para limpeza manual das pastas
+@app.route('/api/cleanup', methods=['POST'])
+def manual_cleanup():
+    """Endpoint para limpeza manual das pastas"""
     try:
-        periodo = int(periodo_raw)
-    except ValueError:
-        return jsonify({"error": "Período inválido. Deve ser um número inteiro."}), 400
+        from tasks import cleanup_processed_files
+        
+        # Executar limpeza
+        cleanup_processed_files()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Limpeza manual executada com sucesso"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Erro na limpeza manual: {str(e)}"
+        }), 500
 
+# Endpoint para verificar saúde do sistema
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Endpoint para verificar saúde do sistema"""
     try:
-        data_inicio, data_fim = get_periodo_datas(periodo)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        # Verificar conexão com Redis
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        import redis
+        r = redis.from_url(redis_url)
+        r.ping()
+        
+        # Verificar conexão com Supabase
+        supabase = get_supabase()
+        # Teste simples de conexão
+        response = supabase.table("companies").select("company_id").limit(1).execute()
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "services": {
+                "redis": "connected",
+                "supabase": "connected",
+                "celery": "available"
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "error": str(e)
+        }), 500
 
-    # Consulta no Supabase
-    result = supabase.table("faturas_fatura") \
-        .select("*") \
-        .eq("nif", nif) \
-        .gte("data", data_inicio.isoformat()) \
-        .lte("data", data_fim.isoformat()) \
-        .execute()
-
-    faturas = result.data or []
-
-    if not faturas:
-        return jsonify({"message": "Nenhuma fatura encontrada para esse período."}), 404
-
-    return jsonify({"faturas": faturas, "periodo": {"inicio": str(data_inicio), "fim": str(data_fim)}})
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+if __name__ == "__main__":
+    app.run(debug=True, host="0.0.0.0", port=8000)
