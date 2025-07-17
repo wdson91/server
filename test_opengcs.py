@@ -15,8 +15,6 @@ sys.path.append(os.path.dirname(__file__))
 from tasks import (
     parse_opengcs_xml_to_json,
     extract_nif_from_filename,
-    extract_opengcs_filial_from_filename,
-    extract_filial_from_filename,
     insert_opengcs_to_supabase,
     download_opengcs_files_from_sftp
 )
@@ -156,10 +154,9 @@ def test_extract_nif_from_filename():
     print("\n🧪 Testando extração de NIF do nome do arquivo...")
     
     test_cases = [
-        ("opengcs-514244208-Douro.xml", "514244208"),
-        ("opengcs-123456789-Gramido.xml", "123456789"),
-        ("opengcs-987654321-Porto.xml", "987654321"),
-        ("opengcs-123456789-Gramido", "123456789"),
+        ("opengcs-123456789.xml", "123456789"),
+        ("opengcs-987654321.xml", "987654321"),
+        ("opengcs-123456789", "123456789"),
         ("invalid-name.xml", ""),
         ("opengcs-.xml", ""),
     ]
@@ -170,53 +167,6 @@ def test_extract_nif_from_filename():
             print(f"✅ {filename} -> {result}")
         else:
             print(f"❌ {filename} -> {result} (esperado: {expected_nif})")
-            return False
-    
-    return True
-
-def test_extract_filial_from_filename():
-    """Testa a extração de filial do nome do arquivo (Faturas)"""
-    print("\n🧪 Testando extração de filial do nome do arquivo (Faturas)...")
-    
-    test_cases = [
-        ("FR202Y2025_7-Gramido.xml", "Gramido"),
-        ("FR201803Y2025_329-Douro.xml", "Douro"),
-        ("FR202Y2025_15-Porto.xml", "Porto"),
-        ("FR202Y2025_7-Gramido", "Gramido"),
-        ("FR202Y2025_7-Gramido.xml", "Gramido"),  # Teste específico para .xml
-        ("invalid-name.xml", ""),
-        ("FR202Y2025_7.xml", ""),
-    ]
-    
-    for filename, expected_filial in test_cases:
-        result = extract_filial_from_filename(filename)
-        if result == expected_filial:
-            print(f"✅ {filename} -> {result}")
-        else:
-            print(f"❌ {filename} -> {result} (esperado: {expected_filial})")
-            return False
-    
-    return True
-
-def test_extract_opengcs_filial_from_filename():
-    """Testa a extração de filial do nome do arquivo (OpenGCs)"""
-    print("\n🧪 Testando extração de filial do nome do arquivo (OpenGCs)...")
-    
-    test_cases = [
-        ("opengcs-514244208-Douro.xml", "Douro"),
-        ("opengcs-123456789-Gramido.xml", "Gramido"),
-        ("opengcs-987654321-Porto.xml", "Porto"),
-        ("opengcs-123456789-Gramido", "Gramido"),
-        ("invalid-name.xml", ""),
-        ("opengcs-123456789.xml", ""),
-    ]
-    
-    for filename, expected_filial in test_cases:
-        result = extract_opengcs_filial_from_filename(filename)
-        if result == expected_filial:
-            print(f"✅ {filename} -> {result}")
-        else:
-            print(f"❌ {filename} -> {result} (esperado: {expected_filial})")
             return False
     
     return True
@@ -259,22 +209,16 @@ def test_supabase_connection():
             ]
         }
         
-        # Criar arquivo temporário para teste com nome que simula o padrão real
+        # Criar arquivo temporário para teste
         with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
             f.write("test")
             xml_file_path = f.name
-        
-        # Renomear arquivo para simular o padrão real (padrão: opengcs-{nif}-{filial}.xml)
-        new_path = xml_file_path.replace('.xml', '-Douro.xml')
-        os.rename(xml_file_path, new_path)
-        xml_file_path = new_path
         
         try:
             # Testar inserção (pode falhar se tabela não existir, mas testa conexão)
             result = insert_opengcs_to_supabase(test_data, xml_file_path)
             if result:
                 print("✅ Conexão Supabase OK")
-                print("✅ Lógica de inserção/atualização funcionando")
             else:
                 print("⚠️ Inserção falhou (pode ser normal se tabela não existir)")
             return True
@@ -293,8 +237,6 @@ def main():
     tests = [
         ("Conversão XML para JSON", test_parse_opengcs_xml),
         ("Extração de NIF", test_extract_nif_from_filename),
-        ("Extração de Filial (Faturas)", test_extract_filial_from_filename),
-        ("Extração de Filial (OpenGCs)", test_extract_opengcs_filial_from_filename),
         ("Conexão SFTP", test_sftp_connection),
         ("Conexão Supabase", test_supabase_connection),
     ]
