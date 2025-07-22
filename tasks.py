@@ -4,7 +4,8 @@ import xmltodict
 import logging
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+import pytz
 from typing import Optional
 from celery import Celery
 from dotenv import load_dotenv
@@ -103,7 +104,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
         # Extrair dados relevantes do SAFT
         saft_data = {
             "arquivo_origem": os.path.basename(xml_file_path),
-            "data_processamento": datetime.now().isoformat(),
+            "data_processamento": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat(),
             "total_faturas": 0,
             "faturas": []
         }
@@ -510,7 +511,7 @@ def cleanup_processed_files():
             xml_files = [f for f in os.listdir(downloads_dir) if f.endswith('.xml')]
             for xml_file in xml_files:
                 file_path = os.path.join(downloads_dir, xml_file)
-                remove_file_safely(file_path, "Arquivo XML")
+                #remove_file_safely(file_path, "Arquivo XML")
         
         # Limpar pasta dados_processados (arquivos JSON)
         dados_dir = './dados_processados'
@@ -518,7 +519,7 @@ def cleanup_processed_files():
             json_files = [f for f in os.listdir(dados_dir) if f.endswith('.json')]
             for json_file in json_files:
                 file_path = os.path.join(dados_dir, json_file)
-                remove_file_safely(file_path, "Arquivo JSON")
+                #remove_file_safely(file_path, "Arquivo JSON")
                     
         logger.info("🧹 Limpeza automática concluída")
         
@@ -909,7 +910,7 @@ def parse_opengcs_xml_to_json(xml_file_path: str) -> Optional[dict]:
         # Extrair dados do OpenGCs
         opengcs_data = {
             "arquivo_origem": os.path.basename(xml_file_path),
-            "data_processamento": datetime.now().isoformat(),
+            "data_processamento": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat(),
             "opengcs_total": 0.0,
             "opengcs_count": 0,
             "gcs": []
@@ -1035,7 +1036,7 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
             
             response = supabase.table("open_gcs_json").update({
                 "data": opengcs_data,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat()
             }).eq("loja_id", loja_id).execute()
             
             if response.data:
@@ -1056,7 +1057,7 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
                 "nif": nif,
                 "filial": filial,
                 "data": opengcs_data,
-                "updated_at": datetime.now().isoformat()
+                "updated_at": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat()
             }
             
             response = supabase.table("open_gcs_json").insert(data_to_insert).execute()
@@ -1101,7 +1102,7 @@ def process_single_opengcs_file(xml_file_path: str):
                 #     logger.warning(f"⚠️ Falha ao excluir arquivo OpenGCs do SFTP: {os.path.basename(xml_file_path)}")
                 
                 # Remover arquivo local após processamento bem-sucedido
-                remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
+               # remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
                 
                 logger.info(f"✅ Arquivo OpenGCs processado com sucesso: {xml_file_path}")
                 return {
@@ -1207,7 +1208,7 @@ def process_single_xml_file(xml_file_path: str):
                     logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
                 
                 # Remover arquivo local após processamento
-                remove_file_safely(xml_file_path, "Arquivo NC XML")
+                #remove_file_safely(xml_file_path, "Arquivo NC XML")
                 
                 logger.info(f"✅ Arquivo NC processado com sucesso: {xml_file_path}")
                 return {
@@ -1261,8 +1262,8 @@ def process_single_xml_file(xml_file_path: str):
                         logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
-                    remove_file_safely(xml_file_path, "Arquivo XML")
-                    remove_file_safely(json_path, "Arquivo JSON")
+                    #remove_file_safely(xml_file_path, "Arquivo XML")
+                    #remove_file_safely(json_path, "Arquivo JSON")
                     
                     logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {
@@ -1382,8 +1383,8 @@ def process_sftp_files():
                     process_and_insert_invoice_batch(Path(json_path))
                     
                     # Remover arquivos após processamento
-                    remove_file_safely(xml_file, "Arquivo XML")
-                    remove_file_safely(json_path, "Arquivo JSON")
+                    #remove_file_safely(xml_file, "Arquivo XML")
+                    #remove_file_safely(json_path, "Arquivo JSON")
                     processed_count += 1
                     
                     logger.info(f"✅ Processado: {xml_file}")
