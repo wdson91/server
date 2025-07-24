@@ -9,10 +9,10 @@ logger = logging.getLogger(__name__)
 
 # Credenciais e host
 #host = "dreamidserver.ddns.net"
-host = "13.48.69.154"
+host = "185.240.248.55"
 port = 22
-username = "sftpuser"
-password = "fd4d41fd-8e17-3cfa-a193-34601e70baf8"
+username = "mydreami"
+password = "*ZCv]1gpqZ970F"
 
 def connect_sftp():
     """Estabelece conexão SFTP e retorna o cliente"""
