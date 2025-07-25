@@ -370,7 +370,7 @@ def download_opengcs_files_from_sftp():
     
     try:
         # Pasta remota onde estão as pastas por NIF
-        pasta_remota = 'uploads'
+        pasta_remota = '/home/mydreami/myDream'
         
         # Pasta local onde os arquivos serão salvos
         pasta_local = './downloads'
