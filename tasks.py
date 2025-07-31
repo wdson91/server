@@ -598,7 +598,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                     "product_code": linha["ProductCode"],
                     "description": linha["Description"],
                     "quantity": linha["Quantity"],
-                    "unit_price": linha["UnitPrice"],
+                    "unit_price": round(linha["UnitPrice"],4),
                     "credit_amount": linha["CreditAmount"],
                     "tax_percentage": linha["TaxPercentage"],
                     "price_with_iva": float(str(linha["PriceWithIva"]).replace(",", ".")),
