@@ -602,7 +602,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                     "credit_amount": linha["CreditAmount"],
                     "tax_percentage": linha["TaxPercentage"],
                     "price_with_iva": float(str(linha["PriceWithIva"]).replace(",", ".")),
-                    "iva":round(linha["Iva"],3)
+                    "iva":round(linha["Iva"],4)
                 })
 
         # Inserir empresas em lote
