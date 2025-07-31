@@ -46,7 +46,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> Optional[str]:
     """Lê arquivo XML tentando diferentes codificações"""
-    encodings = ['utf-8']
+    encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
     
     for encoding in encodings:
         try:
