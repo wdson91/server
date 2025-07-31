@@ -1,4 +1,3 @@
-import os
 import json
 import xmltodict
 import logging
@@ -47,7 +46,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> Optional[str]:
     """Lê arquivo XML tentando diferentes codificações"""
-    encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+    encodings = ['utf-8']
     
     for encoding in encodings:
         try:
@@ -163,7 +162,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
         else:
             logger.warning(f"⚠️ SourceDocuments não encontrado no XML")
             return saft_data
-        
+       
         for invoice in invoices:
             # Extrair dados do DocumentStatus
             document_status = invoice.get('DocumentStatus', {})
@@ -223,14 +222,15 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                         "CreditAmount": float(line.get('CreditAmount', 0)),
                         "TaxPercentage": float(line_tax.get('TaxPercentage', 0)),
                         # Calcular PriceWithIva com base no CreditAmount + TaxPercentage %
-                        "PriceWithIva": (float(line.get('CreditAmount', 0)) * (1 + float(line_tax.get('TaxPercentage', 0)) / 100)) # Usar CreditAmount como PriceWithIva
+                        "PriceWithIva": (float(line.get('CreditAmount', 0)) * (1 + float(line_tax.get('TaxPercentage', 0)) / 100)), # Usar CreditAmount como PriceWithIva
+                        "Iva":(float(line.get('CreditAmount', 0)) * (float(line_tax.get('TaxPercentage', 0)) / 100))
                     })
             
             saft_data["faturas"].append(fatura)
         
         saft_data["total_faturas"] = len(saft_data["faturas"])
         logger.info(f"✅ Processamento concluído: {saft_data['total_faturas']} faturas extraídas")
-        
+       
         return saft_data
         
     except Exception as e:
@@ -291,7 +291,7 @@ def insert_filiais_batch(filiais_data):
 
 def insert_invoices_batch(invoices_data):
     """Insere faturas em lote"""
-    print(invoices_data)
+    
     try:
         if not invoices_data:
             logger.warning("⚠️ Nenhuma fatura para inserir")
@@ -588,10 +588,11 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
                 "tax_type": fatura["TaxType"]
             })
-
+            
             # Armazenar linhas por fatura (não inserir ainda)
             lines_by_invoice[fatura["InvoiceNo"]] = []
             for linha in fatura["Lines"]:
+                
                 lines_by_invoice[fatura["InvoiceNo"]].append({
                     "line_number": linha["LineNumber"],
                     "product_code": linha["ProductCode"],
@@ -600,7 +601,8 @@ def process_and_insert_invoice_batch(file_path: Path):
                     "unit_price": linha["UnitPrice"],
                     "credit_amount": linha["CreditAmount"],
                     "tax_percentage": linha["TaxPercentage"],
-                    "price_with_iva": float(str(linha["PriceWithIva"]).replace(",", "."))
+                    "price_with_iva": float(str(linha["PriceWithIva"]).replace(",", ".")),
+                    "iva":round(linha["Iva"],3)
                 })
 
         # Inserir empresas em lote
@@ -1181,12 +1183,11 @@ def download_and_queue_opengcs_files():
 @celery_app.task
 def process_single_xml_file(xml_file_path: str):
     """Tarefa Celery para processar um arquivo XML individual"""
-    logger.info(f"🔄 Iniciando processamento do arquivo: {xml_file_path}")
-    
+    logger.info(f"Início do processamento - {datetime.now()}")
     try:
         # Verificar se arquivo existe
         if not os.path.exists(xml_file_path):
-            logger.error(f"❌ Arquivo não encontrado: {xml_file_path}")
+            #.error(f"❌ Arquivo não encontrado: {xml_file_path}")
             return {"status": "error", "file": xml_file_path, "message": "Arquivo não encontrado"}
         
         # Verificar se é um arquivo NC (Nota de Crédito)
@@ -1248,24 +1249,26 @@ def process_single_xml_file(xml_file_path: str):
                 with open(json_path, 'w', encoding='utf-8') as f:
                     json.dump(json_data, f, ensure_ascii=False, indent=2)
                 
+                
                 # Processar e inserir no Supabase usando inserção em lote
                 insertion_success = process_and_insert_invoice_batch(Path(json_path))
                 
                 if insertion_success:
                     # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
                     logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
+                
                     sftp_deleted = delete_file_from_sftp(xml_file_path)
                     
                     if sftp_deleted:
-                        logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                         logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
                     else:
-                        logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
+                         logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
-                    #remove_file_safely(xml_file_path, "Arquivo XML")
-                    #remove_file_safely(json_path, "Arquivo JSON")
+                    remove_file_safely(xml_file_path, "Arquivo XML")
+                    remove_file_safely(json_path, "Arquivo JSON")
                     
-                    logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
+                    #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {
                         "status": "success", 
                         "file": xml_file_path, 
@@ -1274,7 +1277,7 @@ def process_single_xml_file(xml_file_path: str):
                     }
                 else:
                     # Se a inserção falhou, não excluir arquivo do SFTP
-                    logger.error(f"❌ Falha na inserção, arquivo não será excluído do SFTP: {xml_file_path}")
+                    
                     return {
                         "status": "error", 
                         "file": xml_file_path, 
@@ -1282,11 +1285,11 @@ def process_single_xml_file(xml_file_path: str):
                         "message": "Falha na inserção no banco de dados"
                     }
             else:
-                logger.error(f"❌ Falha ao processar: {xml_file_path}")
+                #logger.error(f"❌ Falha ao processar: {xml_file_path}")
                 return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}
             
     except Exception as e:
-        logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
+        #logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
         return {"status": "error", "file": xml_file_path, "message": str(e)}
 
 @celery_app.task
@@ -1306,16 +1309,12 @@ def download_and_queue_sftp_files():
         files_to_process = downloaded_files[:MAX_FILES_PER_BATCH]
         remaining_files = len(downloaded_files) - len(files_to_process)
         
-        logger.info(f"📊 Total de arquivos baixados: {len(downloaded_files)}")
-        logger.info(f"📊 Arquivos a processar neste lote: {len(files_to_process)}")
-        if remaining_files > 0:
-            logger.info(f"📊 Arquivos restantes para próximo lote: {remaining_files}")
-        
         # Criar tarefa individual para cada arquivo (limitado)
         queued_tasks = []
         for xml_file in files_to_process:
             # Criar tarefa individual no Celery
             task = process_single_xml_file.delay(xml_file)
+            
             queued_tasks.append({
                 "file": xml_file,
                 "task_id": task.id
@@ -1338,69 +1337,6 @@ def download_and_queue_sftp_files():
         logger.error(f"Erro geral no download SFTP: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-@celery_app.task
-def process_sftp_files():
-    """Tarefa Celery para processar arquivos SFTP (mantida para compatibilidade)"""
-    logger.info("🔄 Iniciando processamento de arquivos SFTP...")
-    
-    try:
-        # Baixar arquivos do SFTP
-        downloaded_files = download_files_from_sftp()
-        
-        if not downloaded_files:
-            logger.info("Nenhum arquivo XML encontrado no SFTP")
-            return {"status": "success", "message": "Nenhum arquivo para processar"}
-        
-        # Limitar número de arquivos processados por vez
-        files_to_process = downloaded_files[:MAX_FILES_PER_BATCH]
-        remaining_files = len(downloaded_files) - len(files_to_process)
-        
-        logger.info(f"📊 Total de arquivos baixados: {len(downloaded_files)}")
-        logger.info(f"📊 Arquivos a processar neste lote: {len(files_to_process)}")
-        if remaining_files > 0:
-            logger.info(f"📊 Arquivos restantes para próximo lote: {remaining_files}")
-        
-        # Pasta para dados processados
-        pasta_dados_processados = './dados_processados'
-        os.makedirs(pasta_dados_processados, exist_ok=True)
-        
-        processed_count = 0
-        
-        for xml_file in files_to_process:
-            try:
-                # Converter XML para JSON
-                json_data = parse_xml_to_json(xml_file)
-                
-                if json_data:
-                    # Salvar JSON processado
-                    json_filename = Path(xml_file).stem + '.json'
-                    json_path = os.path.join(pasta_dados_processados, json_filename)
-                    
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(json_data, f, ensure_ascii=False, indent=2)
-                    
-                    # Processar e inserir no Supabase usando inserção em lote
-                    process_and_insert_invoice_batch(Path(json_path))
-                    
-                    # Remover arquivos após processamento
-                    #remove_file_safely(xml_file, "Arquivo XML")
-                    #remove_file_safely(json_path, "Arquivo JSON")
-                    processed_count += 1
-                    
-                    logger.info(f"✅ Processado: {xml_file}")
-                else:
-                    logger.error(f"❌ Falha ao processar: {xml_file}")
-                    
-            except Exception as e:
-                logger.error(f"Erro ao processar {xml_file}: {str(e)}")
-        
-        logger.info(f"✅ Processamento concluído. {processed_count} arquivos processados.")
-        
-        return {"status": "success", "processed_count": processed_count}
-        
-    except Exception as e:
-        logger.error(f"Erro geral no processamento SFTP: {str(e)}")
-        return {"status": "error", "message": str(e)}
 
 @celery_app.task
 def cleanup_files_task():
@@ -1421,3 +1357,4 @@ def cleanup_files_task():
             "status": "error",
             "message": str(e)
         } 
+    
