@@ -140,7 +140,29 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                
             }
             logger.info(f"✅ Dados da empresa extraídos do Header")
+        customer_data = {
+                    "CustomerID": "Desconhecido",
+                    "AccountID": "",
+                    "CustomerTaxID": "",
+                    "CompanyName": "",
+                    "PostalCode": "",
+                    "AddressDetail": "",
+                    "City": ""
+                }
+        if "MasterFiles" in audit_file:
+            master_files  = audit_file["MasterFiles"]["Customer"]
         
+            if master_files.get('CustomerID') != 999999990:
+                customer_data = {
+                    "CustomerID": master_files.get('CustomerID','Desconhecido'),
+                    "AccountID": master_files.get('AccountID','Desconhecido'),
+                    "CustomerTaxID": master_files.get('CustomerTaxID','Desconhecido'),
+                    "CompanyName": master_files.get('CustomerTaxID','Desconhecido'),
+                    "PostalCode": master_files.get('BillingAddress',{}).get('PostalCode','Desconhecido'),
+                    "AddressDetail": master_files.get('BillingAddress',{}).get('AddressDetail','Desconhecido'),
+                    "City": master_files.get('BillingAddress',{}).get('city','Desconhecido'),
+                }
+                
         # Extrair faturas
         if 'SourceDocuments' in audit_file:
             source_docs = audit_file['SourceDocuments']
@@ -181,7 +203,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             # Extrair filial do nome do arquivo
             filename = os.path.basename(xml_file_path)
             filial = extract_filial_from_filename(filename)
-            
+           
             fatura = {
                 "CompanyID": company_data["CompanyID"],
                 "CompanyName": company_data["CompanyName"],
@@ -204,7 +226,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "GrossTotal": float(document_totals.get('GrossTotal', 0)),
                 "PaymentAmount": float(payment.get('PaymentAmount', 0)),
                 "TaxType": tax_data.get('TaxType', ''),
-                
+                "CustomerData":customer_data,
                 "Lines": []
             }
             
@@ -544,7 +566,7 @@ def process_and_insert_invoice_batch(file_path: Path):
 
         # Armazenar linhas por fatura para inserção posterior
         lines_by_invoice = {}
-
+        
         for fatura in data["faturas"]:
             # Preparar empresa para lote
             companies_batch.append({
@@ -568,7 +590,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                     "codigo_postal": fatura["PostalCode"],
                     "pais": fatura["Country"]
                 })
-
+            
             # Preparar fatura para lote
             invoices_batch.append({
                 "invoice_no": fatura["InvoiceNo"],
@@ -586,8 +608,10 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "net_total": fatura["NetTotal"],
                 "gross_total": fatura["GrossTotal"],
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
-                "tax_type": fatura["TaxType"]
+                "tax_type": fatura["TaxType"],
+                "customer_data": fatura["CustomerData"]
             })
+            
             
             # Armazenar linhas por fatura (não inserir ainda)
             lines_by_invoice[fatura["InvoiceNo"]] = []
@@ -604,7 +628,8 @@ def process_and_insert_invoice_batch(file_path: Path):
                     "price_with_iva": float(str(linha["PriceWithIva"]).replace(",", ".")),
                     "iva":round(linha["Iva"],4)
                 })
-
+                
+         
         # Inserir empresas em lote
         logger.info(f"🏢 Inserindo {len(companies_batch)} empresas...")
         insert_companies_batch(companies_batch)
@@ -1265,8 +1290,8 @@ def process_single_xml_file(xml_file_path: str):
                          logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
-                    remove_file_safely(xml_file_path, "Arquivo XML")
-                    remove_file_safely(json_path, "Arquivo JSON")
+                   # remove_file_safely(xml_file_path, "Arquivo XML")
+                    #remove_file_safely(json_path, "Arquivo JSON")
                     
                     #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {
