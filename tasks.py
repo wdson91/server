@@ -157,10 +157,10 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                     "CustomerID": master_files.get('CustomerID','Desconhecido'),
                     "AccountID": master_files.get('AccountID','Desconhecido'),
                     "CustomerTaxID": master_files.get('CustomerTaxID','Desconhecido'),
-                    "CompanyName": master_files.get('CustomerTaxID','Desconhecido'),
+                    "CompanyName": master_files.get('CompanyName','Desconhecido'),
                     "PostalCode": master_files.get('BillingAddress',{}).get('PostalCode','Desconhecido'),
                     "AddressDetail": master_files.get('BillingAddress',{}).get('AddressDetail','Desconhecido'),
-                    "City": master_files.get('BillingAddress',{}).get('city','Desconhecido'),
+                    "City": master_files.get('BillingAddress',{}).get('City','Desconhecido'),
                 }
                 
         # Extrair faturas
