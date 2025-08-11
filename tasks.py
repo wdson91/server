@@ -139,7 +139,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "SoftwareCertificateNumber": header.get('SoftwareCertificateNumber', '')
                
             }
-            logger.info(f"✅ Dados da empresa extraídos do Header")
+
         customer_data = {
                     "CustomerID": "Desconhecido",
                     "AccountID": "",
@@ -166,15 +166,12 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
         # Extrair faturas
         if 'SourceDocuments' in audit_file:
             source_docs = audit_file['SourceDocuments']
-            logger.info(f"✅ SourceDocuments encontrado")
             
             if 'SalesInvoices' in source_docs:
                 sales_invoices = source_docs['SalesInvoices']
-                logger.info(f"✅ SalesInvoices encontrado")
                 
                 if 'Invoice' in sales_invoices:
                     invoices = sales_invoices['Invoice'] if isinstance(sales_invoices['Invoice'], list) else [sales_invoices['Invoice']]
-                    logger.info(f"✅ {len(invoices)} faturas encontradas")
                 else:
                     logger.warning(f"⚠️ Nenhuma fatura encontrada no XML")
                     return saft_data
@@ -184,7 +181,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
         else:
             logger.warning(f"⚠️ SourceDocuments não encontrado no XML")
             return saft_data
-       
+        
+        
         for invoice in invoices:
             # Extrair dados do DocumentStatus
             document_status = invoice.get('DocumentStatus', {})
@@ -192,7 +190,9 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             
             # Extrair dados do DocumentTotals
             document_totals = invoice.get('DocumentTotals', {})
-            payment = document_totals.get('Payment', {})
+            payments = document_totals.get('Payment', {})
+            if isinstance(payments,list):
+              payment = [ x for x in payments]
             
             # Extrair dados do Line (pode ser lista ou dict)
             line_data = invoice.get('Line', {})
@@ -203,7 +203,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             # Extrair filial do nome do arquivo
             filename = os.path.basename(xml_file_path)
             filial = extract_filial_from_filename(filename)
-           
+            
             fatura = {
                 "CompanyID": company_data["CompanyID"],
                 "CompanyName": company_data["CompanyName"],
@@ -224,7 +224,8 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "TaxPayable": float(document_totals.get('TaxPayable', 0)),
                 "NetTotal": float(document_totals.get('NetTotal', 0)),
                 "GrossTotal": float(document_totals.get('GrossTotal', 0)),
-                "PaymentAmount": float(payment.get('PaymentAmount', 0)),
+                "PaymentMethod": payments,
+                "PaymentAmount": float(document_totals.get('GrossTotal', 0)),
                 "TaxType": tax_data.get('TaxType', ''),
                 "CustomerData":customer_data,
                 "Lines": []
@@ -607,6 +608,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "certificate_number": fatura["CertificateNumber"],
                 "net_total": fatura["NetTotal"],
                 "gross_total": fatura["GrossTotal"],
+                "payment_methods":fatura["PaymentMethod"],
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
                 "tax_type": fatura["TaxType"],
                 "customer_data": fatura["CustomerData"]
@@ -861,9 +863,7 @@ def delete_invoice_and_related_data(invoice_no: str) -> bool:
 
 def process_nc_file(xml_file_path: str) -> dict:
     """Processa arquivo NC (Nota de Crédito) e deleta faturas referenciadas"""
-    try:
-        logger.info(f"📄 Processando arquivo NC: {xml_file_path}")
-        
+    try:        
         # Extrair referências do arquivo NC
         references = extract_references_from_nc_xml(xml_file_path)
         
@@ -890,7 +890,6 @@ def process_nc_file(xml_file_path: str) -> dict:
             
             if match:
                 invoice_no = match.group(0)
-                logger.info(f"📋 Número da fatura extraído: {invoice_no}")
                 
                 # Tentar deletar a fatura
                 if delete_invoice_and_related_data(invoice_no):
@@ -901,7 +900,6 @@ def process_nc_file(xml_file_path: str) -> dict:
                 logger.warning(f"⚠️ Padrão de fatura não reconhecido na referência: {reference}")
                 failed_deletions.append(reference)
         
-        logger.info(f"✅ Processamento do NC concluído. Deletadas: {len(deleted_invoices)}, Falhas: {len(failed_deletions)}")
         
         return {
             "status": "success",
@@ -1205,27 +1203,35 @@ def download_and_queue_opengcs_files():
         logger.error(f"Erro geral no download SFTP OpenGCs: {str(e)}")
         return {"status": "error", "message": str(e)}
 
+########
+def file_existis(xml_path):
+
+    if not os.path.exists(xml_path):
+        return {"status": "error", "file": xml_path, "message": "Arquivo não encontrado"}
+
+def invoice_fr_or_nc(filename):
+    
+    return filename[0:2]
+########
+
+
+
 @celery_app.task
 def process_single_xml_file(xml_file_path: str):
-    """Tarefa Celery para processar um arquivo XML individual"""
-    logger.info(f"Início do processamento - {datetime.now()}")
+
     try:
-        # Verificar se arquivo existe
-        if not os.path.exists(xml_file_path):
-            #.error(f"❌ Arquivo não encontrado: {xml_file_path}")
-            return {"status": "error", "file": xml_file_path, "message": "Arquivo não encontrado"}
+        file_existis(xml_file_path)
         
         # Verificar se é um arquivo NC (Nota de Crédito)
         filename = os.path.basename(xml_file_path)
-        if filename.startswith('NC'):
-            logger.info(f"📄 Arquivo NC detectado, processando como Nota de Crédito: {filename}")
-            
+        file_type = invoice_fr_or_nc(filename)
+        
+        if file_type=='NC':
             # Processar arquivo NC
             nc_result = process_nc_file(xml_file_path)
             
             if nc_result["status"] in ["success", "warning"]:
-                # Excluir arquivo do SFTP após processamento bem-sucedido
-                logger.info(f"🗑️ Excluindo arquivo NC do SFTP após processamento: {xml_file_path}")
+                
                 sftp_deleted = delete_file_from_sftp(xml_file_path)
                 
                 if sftp_deleted:
@@ -1248,7 +1254,6 @@ def process_single_xml_file(xml_file_path: str):
                 }
             else:
                 # Se o processamento NC falhou, não excluir arquivo do SFTP
-                logger.error(f"❌ Falha no processamento NC, arquivo não será excluído do SFTP: {xml_file_path}")
                 return {
                     "status": "error", 
                     "file": xml_file_path, 
@@ -1257,9 +1262,7 @@ def process_single_xml_file(xml_file_path: str):
                 }
         
         # Processar arquivo FR (Fatura Regular)
-        else:
-            logger.info(f"📄 Arquivo FR detectado, processando como Fatura Regular: {filename}")
-            
+        elif file_type == "FR":   
             # Converter XML para JSON
             json_data = parse_xml_to_json(xml_file_path)
             
@@ -1290,8 +1293,8 @@ def process_single_xml_file(xml_file_path: str):
                          logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
-                   # remove_file_safely(xml_file_path, "Arquivo XML")
-                    #remove_file_safely(json_path, "Arquivo JSON")
+                    remove_file_safely(xml_file_path, "Arquivo XML")
+                    remove_file_safely(json_path, "Arquivo JSON")
                     
                     #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {
@@ -1312,7 +1315,9 @@ def process_single_xml_file(xml_file_path: str):
             else:
                 #logger.error(f"❌ Falha ao processar: {xml_file_path}")
                 return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}
-            
+        else:
+             
+             return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}  
     except Exception as e:
         #logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
         return {"status": "error", "file": xml_file_path, "message": str(e)}
