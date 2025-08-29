@@ -1072,7 +1072,7 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
         logger.error(f"❌ Erro ao inserir dados OpenGCs: {str(e)}")
         return False
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def process_single_opengcs_file(xml_file_path: str):
     """Tarefa Celery para processar um arquivo OpenGCs individual"""
     logger.info(f"🔄 Iniciando processamento do arquivo OpenGCs: {xml_file_path}")
@@ -1128,7 +1128,7 @@ def process_single_opengcs_file(xml_file_path: str):
         logger.error(f"Erro ao processar OpenGCs {xml_file_path}: {str(e)}")
         return {"status": "error", "file": xml_file_path, "message": str(e)}
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def download_and_queue_opengcs_files():
     """Tarefa Celery para baixar arquivos OpenGCs SFTP e criar tarefas individuais"""
     logger.info("🔄 Iniciando download de arquivos OpenGCs SFTP...")
@@ -1177,7 +1177,7 @@ def download_and_queue_opengcs_files():
         logger.error(f"Erro geral no download SFTP OpenGCs: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def process_single_xml_file(xml_file_path: str):
     """Tarefa Celery para processar um arquivo XML individual"""
     logger.info(f"🔄 Iniciando processamento do arquivo: {xml_file_path}")
@@ -1288,7 +1288,7 @@ def process_single_xml_file(xml_file_path: str):
         logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
         return {"status": "error", "file": xml_file_path, "message": str(e)}
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def download_and_queue_sftp_files():
     """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais"""
     logger.info("🔄 Iniciando download de arquivos SFTP...")
@@ -1337,7 +1337,7 @@ def download_and_queue_sftp_files():
         logger.error(f"Erro geral no download SFTP: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def process_sftp_files():
     """Tarefa Celery para processar arquivos SFTP (mantida para compatibilidade)"""
     logger.info("🔄 Iniciando processamento de arquivos SFTP...")
@@ -1401,7 +1401,7 @@ def process_sftp_files():
         logger.error(f"Erro geral no processamento SFTP: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-@celery_app.task
+@celery_app.task(ignore_result=True)
 def cleanup_files_task():
     """Tarefa Celery para limpeza programada de arquivos"""
     logger.info("🧹 Iniciando limpeza programada de arquivos...")

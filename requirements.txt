@@ -30,3 +30,7 @@ python-dateutil==2.8.2
 
 # Para geração de PDF
 reportlab==4.0.4
+
+
+uvicorn[standard]  # O [standard] instala otimizações adicionais
+gunicorn
