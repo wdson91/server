@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import paramiko
 import os
 import logging
@@ -7,12 +8,13 @@ import json
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+load_dotenv()
 # Credenciais e host
 #host = "dreamidserver.ddns.net"
-host = "185.240.248.55"
-port = 22
-username = "mydreami"
-password = "*ZCv]1gpqZ970F"
+host = os.getenv("SFTP_HOST")
+port = os.getenv("SFTP_PORT")
+username = os.getenv("SFTP_USERNAME")
+password = os.getenv("SFTP_PASSWORD")
 
 def connect_sftp():
     """Estabelece conexão SFTP e retorna o cliente"""
