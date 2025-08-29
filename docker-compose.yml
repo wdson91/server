@@ -51,20 +51,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  flower:
-    build: .
-    command: celery -A celery_config.celery_app --broker=redis://redis:6379/0 flower --port=5555 
-    ports:
-      - "5555:5555"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
-    env_file:
-      - .env
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
+  # flower:
+  #   build: .
+  #   command: celery -A celery_config.celery_app --broker=redis://redis:6379/0 flower --port=5555 
+  #   ports:
+  #     - "5555:5555"
+  #   environment:
+  #     - REDIS_URL=redis://redis:6379/0
+  #     - PYTHONPATH=/app
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
   flask-app:
     build: .
