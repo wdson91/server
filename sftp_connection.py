@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 # Credenciais e host
-#host = "dreamidserver.ddns.net"
+
 host = os.getenv("SFTP_HOST")
-port = os.getenv("SFTP_PORT")
+port = int(os.getenv("SFTP_PORT", 22))
 username = os.getenv("SFTP_USERNAME")
 password = os.getenv("SFTP_PASSWORD")
 
