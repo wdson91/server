@@ -6,7 +6,6 @@ from pathlib import Path
 from datetime import datetime, timezone
 import pytz
 from typing import Optional
-from celery import Celery
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -46,7 +45,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> Optional[str]:
     """Lê arquivo XML tentando diferentes codificações"""
-    encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+    encodings = [ 'latin-1', 'utf-8','iso-8859-1', 'cp1252']
     
     for encoding in encodings:
         try:
@@ -986,17 +985,14 @@ def extract_nif_from_filename(filename: str) -> str:
     """Extrai o NIF do nome do arquivo opengcs-{nif}-{filial}"""
     try:
         # Padrão: opengcs-{nif}-{filial}
-        if filename.startswith('opengcs-'):
-            # Remove 'opengcs-' do início
-            remaining = filename[8:]
-            # Extrai NIF (tudo até o primeiro hífen)
-            if '-' in remaining:
-                nif = remaining.split('-')[0]
-                logger.info(f"✅ NIF extraído: {nif} do arquivo: {filename}")
-                return nif
-            else:
-                logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
-                return ""
+        if filename.startswith('opengcs-') and filename.endswith('.xml'):
+            # 1. Remove a extensão .xml (ou qualquer outra extensão)
+            nome_sem_extensao = filename.rsplit('.', 1)[0]
+            
+            # 2. Faz o split pelo "-" e pega a última parte (a filial sempre está depois do último "-")
+            filial = nome_sem_extensao.split("-")[  1]
+           
+            return filial
         else:
             logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
             return ""
@@ -1006,26 +1002,16 @@ def extract_nif_from_filename(filename: str) -> str:
 
 def extract_opengcs_filial_from_filename(filename: str) -> str:
     """Extrai a filial do nome do arquivo opengcs-{nif}-{filial}"""
+    print(filename)
+    
     try:
         # Padrão: opengcs-{nif}-{filial}
-        if filename.startswith('opengcs-'):
-            # Remove 'opengcs-' do início
-            remaining = filename[8:]
-            # Extrai filial (tudo após o segundo hífen)
-            if '-' in remaining:
-                parts = remaining.split('-')
-                if len(parts) >= 2:
-                    filial = parts[1]
-                    # Remove extensão .xml se existir
-                    filial = filial.replace('.xml', '')
-                    logger.info(f"✅ Filial OpenGCs extraída: {filial} do arquivo: {filename}")
-                    return filial
-                else:
-                    logger.warning(f"⚠️ Padrão de filial OpenGCs não reconhecido: {filename}")
-                    return ""
-            else:
-                logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
-                return ""
+        if filename.startswith('opengcs-') and filename.endswith('.xml'):
+            nome_sem_extensao = filename.rsplit('.', 1)[0]
+            
+       
+            return  nome_sem_extensao[18:]
+            
         else:
             logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
             return ""
@@ -1045,6 +1031,7 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
         nif = extract_nif_from_filename(filename)
         filial = extract_opengcs_filial_from_filename(filename)
         
+
         if not nif:
             logger.error(f"❌ Não foi possível extrair NIF do arquivo: {filename}")
             return False
@@ -1097,11 +1084,23 @@ def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
     except Exception as e:
         logger.error(f"❌ Erro ao inserir dados OpenGCs: {str(e)}")
         return False
+########
+def file_existis(xml_path):
 
-@celery_app.task
+    if not os.path.exists(xml_path):
+        return {"status": "error", "file": xml_path, "message": "Arquivo não encontrado"}
+
+def invoice_fr_or_nc(filename):
+    
+    return filename[0:2]
+########
+
+#@celery_app.task
 def process_single_opengcs_file(xml_file_path: str):
     """Tarefa Celery para processar um arquivo OpenGCs individual"""
     logger.info(f"🔄 Iniciando processamento do arquivo OpenGCs: {xml_file_path}")
+    
+
     
     try:
         # Verificar se arquivo existe
@@ -1157,6 +1156,9 @@ def process_single_opengcs_file(xml_file_path: str):
 @celery_app.task
 def download_and_queue_opengcs_files():
     """Tarefa Celery para baixar arquivos OpenGCs SFTP e criar tarefas individuais"""
+
+
+    
     logger.info("🔄 Iniciando download de arquivos OpenGCs SFTP...")
     
     try:
@@ -1180,12 +1182,12 @@ def download_and_queue_opengcs_files():
         queued_tasks = []
         for xml_file in files_to_process:
             # Criar tarefa individual no Celery
-            task = process_single_opengcs_file.delay(xml_file)
+            result = process_single_opengcs_file(xml_file)
             queued_tasks.append({
                 "file": xml_file,
-                "task_id": task.id
+                "task_id": result.get("task_id", None),
+                "status": result.get("status", "unknown")
             })
-            logger.info(f"📋 Tarefa OpenGCs criada para: {xml_file} (ID: {task.id})")
         
         logger.info(f"✅ {len(queued_tasks)} tarefas OpenGCs criadas para processamento")
         
@@ -1203,16 +1205,6 @@ def download_and_queue_opengcs_files():
         logger.error(f"Erro geral no download SFTP OpenGCs: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-########
-def file_existis(xml_path):
-
-    if not os.path.exists(xml_path):
-        return {"status": "error", "file": xml_path, "message": "Arquivo não encontrado"}
-
-def invoice_fr_or_nc(filename):
-    
-    return filename[0:2]
-########
 
 
 
@@ -1326,7 +1318,9 @@ def process_single_xml_file(xml_file_path: str):
 def download_and_queue_sftp_files():
     """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais"""
     logger.info("🔄 Iniciando download de arquivos SFTP...")
-    
+
+    download_and_queue_opengcs_files_sync()
+
     try:
         # Baixar arquivos do SFTP
         downloaded_files = download_files_from_sftp()
@@ -1388,3 +1382,29 @@ def cleanup_files_task():
             "message": str(e)
         } 
     
+
+from celery import chain
+@celery_app.task
+def download_all():
+    chain(
+        download_and_queue_opengcs_files.s(),
+        download_and_queue_sftp_files.s()
+    ).apply_async()
+
+
+def download_and_queue_opengcs_files_sync():
+    """Mesma lógica do download_and_queue_opengcs_files, mas rodando síncrono"""
+    logger.info("🔄 Baixando arquivos OpenGCs de forma síncrona...")
+
+    downloaded_files = download_opengcs_files_from_sftp()
+    if not downloaded_files:
+        logger.info("Nenhum arquivo OpenGCs encontrado")
+        return
+
+    files_to_process = downloaded_files[:MAX_FILES_PER_BATCH]
+
+    for xml_file in files_to_process:
+        # Chama process_single_opengcs_file de forma síncrona
+        process_single_opengcs_file(xml_file)
+    
+    logger.info(f"✅ {len(files_to_process)} arquivos OpenGCs processados")
