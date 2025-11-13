@@ -610,7 +610,8 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "payment_methods":fatura["PaymentMethod"],
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
                 "tax_type": fatura["TaxType"],
-                "customer_data": fatura["CustomerData"]
+                "customer_data": fatura["CustomerData"],
+                "active": True  # Novas invoices são ativas por padrão
             })
             
             
@@ -818,50 +819,46 @@ def extract_references_from_nc_xml(xml_file_path: str) -> list:
         logger.error(f"❌ Erro ao extrair referências do arquivo NC {xml_file_path}: {str(e)}")
         return []
 
-def delete_invoice_and_related_data(invoice_no: str) -> bool:
-    """Deleta uma fatura e todos os dados relacionados (linhas e links de arquivos)"""
+def deactivate_invoice(invoice_no: str) -> bool:
+    """Desativa uma fatura (marca active = false) ao invés de deletar"""
     try:
-        logger.info(f"🗑️ Iniciando exclusão da fatura: {invoice_no}")
+        logger.info(f"🔄 Iniciando desativação da fatura: {invoice_no}")
         
         # 1. Buscar a fatura pelo número
-        invoice_response = supabase.table("invoices").select("id").eq("invoice_no", invoice_no).execute()
+        invoice_response = supabase.table("invoices").select("id, active").eq("invoice_no", invoice_no).execute()
         
         if not invoice_response.data:
             logger.warning(f"⚠️ Fatura não encontrada: {invoice_no}")
             return False
         
         invoice_id = invoice_response.data[0]["id"]
-        logger.info(f"📋 Fatura encontrada com ID: {invoice_id}")
+        current_active = invoice_response.data[0].get("active", True)
         
-        # 2. Deletar linhas da fatura
-        lines_delete = supabase.table("invoice_lines").delete().eq("invoice_id", invoice_id).execute()
-        if lines_delete.data:
-            logger.info(f"✅ {len(lines_delete.data)} linhas da fatura deletadas")
-        else:
-            logger.info("ℹ️ Nenhuma linha encontrada para deletar")
+        # Verificar se já está desativada
+        if current_active is False:
+            logger.info(f"ℹ️ Fatura {invoice_no} já está desativada")
+            return True
         
-        # 3. Deletar links de arquivos
-        links_delete = supabase.table("invoice_file_links").delete().eq("invoice_id", invoice_id).execute()
-        if links_delete.data:
-            logger.info(f"✅ {len(links_delete.data)} links de arquivos deletados")
-        else:
-            logger.info("ℹ️ Nenhum link encontrado para deletar")
+        logger.info(f"📋 Fatura encontrada com ID: {invoice_id}, status atual: active={current_active}")
         
-        # 4. Deletar a fatura
-        invoice_delete = supabase.table("invoices").delete().eq("id", invoice_id).execute()
-        if invoice_delete.data:
-            logger.info(f"✅ Fatura {invoice_no} deletada com sucesso")
+        # 2. Atualizar a fatura para active = false
+        invoice_update = supabase.table("invoices").update({
+            "active": False
+        }).eq("id", invoice_id).execute()
+        
+        if invoice_update.data:
+            logger.info(f"✅ Fatura {invoice_no} desativada com sucesso (active = false)")
             return True
         else:
-            logger.error(f"❌ Falha ao deletar fatura {invoice_no}")
+            logger.error(f"❌ Falha ao desativar fatura {invoice_no}")
             return False
         
     except Exception as e:
-        logger.error(f"❌ Erro ao deletar fatura {invoice_no}: {str(e)}")
+        logger.error(f"❌ Erro ao desativar fatura {invoice_no}: {str(e)}")
         return False
 
 def process_nc_file(xml_file_path: str) -> dict:
-    """Processa arquivo NC (Nota de Crédito) e deleta faturas referenciadas"""
+    """Processa arquivo NC (Nota de Crédito) e desativa faturas referenciadas (active = false)"""
     try:        
         # Extrair referências do arquivo NC
         references = extract_references_from_nc_xml(xml_file_path)
@@ -871,12 +868,12 @@ def process_nc_file(xml_file_path: str) -> dict:
             return {
                 "status": "warning",
                 "message": "Nenhuma referência encontrada",
-                "deleted_invoices": [],
-                "failed_deletions": []
+                "deactivated_invoices": [],
+                "failed_deactivations": []
             }
         
-        deleted_invoices = []
-        failed_deletions = []
+        deactivated_invoices = []
+        failed_deactivations = []
         
         # Processar cada referência
         for reference in references:
@@ -890,21 +887,21 @@ def process_nc_file(xml_file_path: str) -> dict:
             if match:
                 invoice_no = match.group(0)
                 
-                # Tentar deletar a fatura
-                if delete_invoice_and_related_data(invoice_no):
-                    deleted_invoices.append(invoice_no)
+                # Tentar desativar a fatura (marcar active = false)
+                if deactivate_invoice(invoice_no):
+                    deactivated_invoices.append(invoice_no)
                 else:
-                    failed_deletions.append(invoice_no)
+                    failed_deactivations.append(invoice_no)
             else:
                 logger.warning(f"⚠️ Padrão de fatura não reconhecido na referência: {reference}")
-                failed_deletions.append(reference)
+                failed_deactivations.append(reference)
         
         
         return {
             "status": "success",
-            "message": f"NC processado: {len(deleted_invoices)} faturas deletadas, {len(failed_deletions)} falhas",
-            "deleted_invoices": deleted_invoices,
-            "failed_deletions": failed_deletions,
+            "message": f"NC processado: {len(deactivated_invoices)} faturas desativadas, {len(failed_deactivations)} falhas",
+            "deactivated_invoices": deactivated_invoices,
+            "failed_deactivations": failed_deactivations,
             "total_references": len(references)
         }
         
@@ -913,8 +910,8 @@ def process_nc_file(xml_file_path: str) -> dict:
         return {
             "status": "error",
             "message": str(e),
-            "deleted_invoices": [],
-            "failed_deletions": []
+            "deactivated_invoices": [],
+            "failed_deactivations": []
         }
 
 def parse_opengcs_xml_to_json(xml_file_path: str) -> Optional[dict]:
@@ -1263,9 +1260,9 @@ def process_single_xml_file(xml_file_path: str):
                         "file": xml_file_path, 
                         "type": "NC",
                         "total_faturas": json_data.get("total_faturas", 0),
-                        "deleted_invoices": nc_result["deleted_invoices"],
-                        "failed_deletions": nc_result["failed_deletions"],
-                        "total_references": nc_result["total_references"],
+                        "deactivated_invoices": nc_result.get("deactivated_invoices", []),
+                        "failed_deactivations": nc_result.get("failed_deactivations", []),
+                        "total_references": nc_result.get("total_references", 0),
                         "message": f"NC salva no banco. {nc_result['message']}"
                     }
                 elif not insertion_success:
@@ -1276,8 +1273,8 @@ def process_single_xml_file(xml_file_path: str):
                         "file": xml_file_path, 
                         "type": "NC",
                         "message": "Falha na inserção da invoice NC no banco de dados",
-                        "deleted_invoices": nc_result.get("deleted_invoices", []),
-                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "deactivated_invoices": nc_result.get("deactivated_invoices", []),
+                        "failed_deactivations": nc_result.get("failed_deactivations", []),
                         "total_references": nc_result.get("total_references", 0)
                     }
                 else:
@@ -1288,8 +1285,8 @@ def process_single_xml_file(xml_file_path: str):
                         "file": xml_file_path, 
                         "type": "NC",
                         "total_faturas": json_data.get("total_faturas", 0),
-                        "deleted_invoices": nc_result.get("deleted_invoices", []),
-                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "deactivated_invoices": nc_result.get("deactivated_invoices", []),
+                        "failed_deactivations": nc_result.get("failed_deactivations", []),
                         "total_references": nc_result.get("total_references", 0),
                         "message": f"NC salva no banco, mas {nc_result.get('message', 'problemas no processamento de referências')}"
                     }
@@ -1302,8 +1299,8 @@ def process_single_xml_file(xml_file_path: str):
                         "file": xml_file_path, 
                         "type": "NC",
                         "message": "Falha na conversão XML da invoice NC, mas referências foram processadas",
-                        "deleted_invoices": nc_result.get("deleted_invoices", []),
-                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "deactivated_invoices": nc_result.get("deactivated_invoices", []),
+                        "failed_deactivations": nc_result.get("failed_deactivations", []),
                         "total_references": nc_result.get("total_references", 0)
                     }
                 else:
