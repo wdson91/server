@@ -1219,39 +1219,102 @@ def process_single_xml_file(xml_file_path: str):
         file_type = invoice_fr_or_nc(filename)
         
         if file_type=='NC':
-            # Processar arquivo NC
+            # Processar arquivo NC (extrair referências e deletar faturas referenciadas)
             nc_result = process_nc_file(xml_file_path)
             
-            if nc_result["status"] in ["success", "warning"]:
+            # Agora também salvar a invoice NC no banco (mesmo processo das FRs)
+            logger.info(f"🔄 Processando e salvando invoice NC no banco: {filename}")
+            
+            # Converter XML para JSON
+            json_data = parse_xml_to_json(xml_file_path)
+            
+            if json_data:
+                # Salvar JSON processado
+                pasta_dados_processados = './dados_processados'
+                os.makedirs(pasta_dados_processados, exist_ok=True)
                 
-                sftp_deleted = delete_file_from_sftp(xml_file_path)
+                json_filename = Path(xml_file_path).stem + '.json'
+                json_path = os.path.join(pasta_dados_processados, json_filename)
                 
-                if sftp_deleted:
-                    logger.info(f"✅ Arquivo NC excluído do SFTP com sucesso: {filename}")
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_data, f, ensure_ascii=False, indent=2)
+                
+                # Processar e inserir no Supabase usando inserção em lote
+                insertion_success = process_and_insert_invoice_batch(Path(json_path))
+                
+                if insertion_success and nc_result["status"] in ["success", "warning"]:
+                    # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida E o processamento de referências foi OK
+                    logger.info(f"🗑️ Excluindo arquivo NC do SFTP após processamento bem-sucedido: {xml_file_path}")
+                
+                    sftp_deleted = delete_file_from_sftp(xml_file_path)
+                    
+                    if sftp_deleted:
+                        logger.info(f"✅ Arquivo NC excluído do SFTP com sucesso: {filename}")
+                    else:
+                        logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
+                    
+                    # Remover arquivos locais após processamento bem-sucedido
+                    remove_file_safely(xml_file_path, "Arquivo NC XML")
+                    remove_file_safely(json_path, "Arquivo JSON")
+                    
+                    logger.info(f"✅ Arquivo NC processado e salvo com sucesso: {xml_file_path}")
+                    return {
+                        "status": "success", 
+                        "file": xml_file_path, 
+                        "type": "NC",
+                        "total_faturas": json_data.get("total_faturas", 0),
+                        "deleted_invoices": nc_result["deleted_invoices"],
+                        "failed_deletions": nc_result["failed_deletions"],
+                        "total_references": nc_result["total_references"],
+                        "message": f"NC salva no banco. {nc_result['message']}"
+                    }
+                elif not insertion_success:
+                    # Se a inserção falhou, não excluir arquivo do SFTP
+                    logger.error(f"❌ Falha ao salvar invoice NC no banco: {xml_file_path}")
+                    return {
+                        "status": "error", 
+                        "file": xml_file_path, 
+                        "type": "NC",
+                        "message": "Falha na inserção da invoice NC no banco de dados",
+                        "deleted_invoices": nc_result.get("deleted_invoices", []),
+                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "total_references": nc_result.get("total_references", 0)
+                    }
                 else:
-                    logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
-                
-                # Remover arquivo local após processamento
-                #remove_file_safely(xml_file_path, "Arquivo NC XML")
-                
-                logger.info(f"✅ Arquivo NC processado com sucesso: {xml_file_path}")
-                return {
-                    "status": nc_result["status"], 
-                    "file": xml_file_path, 
-                    "type": "NC",
-                    "deleted_invoices": nc_result["deleted_invoices"],
-                    "failed_deletions": nc_result["failed_deletions"],
-                    "total_references": nc_result["total_references"],
-                    "message": nc_result["message"]
-                }
+                    # Se o processamento de referências falhou, mas a inserção foi OK
+                    logger.warning(f"⚠️ Invoice NC salva, mas processamento de referências teve problemas: {xml_file_path}")
+                    return {
+                        "status": "warning", 
+                        "file": xml_file_path, 
+                        "type": "NC",
+                        "total_faturas": json_data.get("total_faturas", 0),
+                        "deleted_invoices": nc_result.get("deleted_invoices", []),
+                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "total_references": nc_result.get("total_references", 0),
+                        "message": f"NC salva no banco, mas {nc_result.get('message', 'problemas no processamento de referências')}"
+                    }
             else:
-                # Se o processamento NC falhou, não excluir arquivo do SFTP
-                return {
-                    "status": "error", 
-                    "file": xml_file_path, 
-                    "type": "NC",
-                    "message": nc_result["message"]
-                }
+                # Se o parsing falhou, mas o processamento de referências foi OK
+                if nc_result["status"] in ["success", "warning"]:
+                    logger.warning(f"⚠️ Falha ao parsear invoice NC, mas referências foram processadas: {xml_file_path}")
+                    return {
+                        "status": "warning", 
+                        "file": xml_file_path, 
+                        "type": "NC",
+                        "message": "Falha na conversão XML da invoice NC, mas referências foram processadas",
+                        "deleted_invoices": nc_result.get("deleted_invoices", []),
+                        "failed_deletions": nc_result.get("failed_deletions", []),
+                        "total_references": nc_result.get("total_references", 0)
+                    }
+                else:
+                    # Se ambos falharam
+                    logger.error(f"❌ Falha ao processar invoice NC: {xml_file_path}")
+                    return {
+                        "status": "error", 
+                        "file": xml_file_path, 
+                        "type": "NC",
+                        "message": nc_result.get("message", "Falha no processamento da invoice NC")
+                    }
         
         # Processar arquivo FR (Fatura Regular)
         elif file_type == "FR":   
