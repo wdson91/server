@@ -203,6 +203,9 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             filename = os.path.basename(xml_file_path)
             filial = extract_filial_from_filename(filename)
             
+            # Inicializar variáveis para armazenar primeira referência e motivo (para notas de crédito)
+            nc_reason_data = None  # Será um dict: {"fatura_ref": "...", "reason": "..."}
+            
             fatura = {
                 "CompanyID": company_data["CompanyID"],
                 "CompanyName": company_data["CompanyName"],
@@ -227,6 +230,7 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "PaymentAmount": float(document_totals.get('GrossTotal', 0)),
                 "TaxType": tax_data.get('TaxType', ''),
                 "CustomerData":customer_data,
+                "NCReason": nc_reason_data,  # JSON com primeira referência e motivo: {"fatura_ref": "...", "reason": "..."}
                 "Lines": []
             }
             
@@ -235,18 +239,132 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 lines = invoice['Line'] if isinstance(invoice['Line'], list) else [invoice['Line']]
                 for line in lines:
                     line_tax = line.get('Tax', {})
+                    
+                    # Extrair References e Reason das linhas (para notas de crédito)
+                    # Apenas a primeira referência e motivo encontrados serão salvos
+                    if 'References' in line and nc_reason_data is None:
+                        references_data = line.get('References', {})
+                        reason_value = ""
+                        first_reference = ""
+                        
+                        # References pode ser dict ou lista
+                        if isinstance(references_data, dict):
+                            # Extrair Reason
+                            if 'Reason' in references_data:
+                                reason_value = references_data.get('Reason', '')
+                                # Reason pode ser string direta ou dict com #text
+                                if isinstance(reason_value, dict) and '#text' in reason_value:
+                                    reason_value = reason_value['#text']
+                                if reason_value and isinstance(reason_value, str):
+                                    reason_value = reason_value.strip()
+                            
+                            # Extrair primeira Reference
+                            if 'Reference' in references_data:
+                                ref = references_data.get('Reference', '')
+                                # Reference pode ser lista, string ou dict
+                                if isinstance(ref, list) and len(ref) > 0:
+                                    # Pegar apenas o primeiro
+                                    r = ref[0]
+                                    if isinstance(r, str):
+                                        first_reference = r.strip()
+                                    elif isinstance(r, dict) and '#text' in r:
+                                        first_reference = r['#text'].strip()
+                                elif isinstance(ref, str):
+                                    first_reference = ref.strip()
+                                elif isinstance(ref, dict) and '#text' in ref:
+                                    first_reference = ref['#text'].strip()
+                        
+                        elif isinstance(references_data, list) and len(references_data) > 0:
+                            # Se References é uma lista, pegar apenas o primeiro item
+                            ref_item = references_data[0]
+                            if isinstance(ref_item, dict):
+                                # Extrair Reason
+                                if 'Reason' in ref_item:
+                                    reason_value = ref_item.get('Reason', '')
+                                    if isinstance(reason_value, dict) and '#text' in reason_value:
+                                        reason_value = reason_value['#text']
+                                    if reason_value and isinstance(reason_value, str):
+                                        reason_value = reason_value.strip()
+                                
+                                # Extrair Reference
+                                if 'Reference' in ref_item:
+                                    ref = ref_item.get('Reference', '')
+                                    if isinstance(ref, str):
+                                        first_reference = ref.strip()
+                                    elif isinstance(ref, dict) and '#text' in ref:
+                                        first_reference = ref['#text'].strip()
+                        
+                        # Salvar apenas a primeira referência encontrada
+                        if first_reference:
+                            nc_reason_data = {
+                                "fatura_ref": first_reference,
+                                "reason": reason_value if reason_value else ""
+                            }
+                            logger.info(f"📝 Primeira referência encontrada na linha {line.get('LineNumber', 'N/A')}: {first_reference} - Motivo: {reason_value if reason_value else 'N/A'}")
+                    
+                    # Nas notas de crédito, o valor pode estar em DebitAmount ao invés de CreditAmount
+                    # Verificar ambos os campos e usar o que existir e não for zero
+                    credit_amount = line.get('CreditAmount', 0) or 0
+                    debit_amount = line.get('DebitAmount', 0) or 0
+                    
+                    # Converter ambos para float para comparação
+                    try:
+                        credit_float = float(str(credit_amount).replace(",", ".")) if credit_amount else 0.0
+                    except (ValueError, TypeError):
+                        credit_float = 0.0
+                    
+                    try:
+                        debit_float = float(str(debit_amount).replace(",", ".")) if debit_amount else 0.0
+                    except (ValueError, TypeError):
+                        debit_float = 0.0
+                    
+                    # Usar CreditAmount se existir e não for zero, senão usar DebitAmount
+                    if credit_float != 0:
+                        amount_float = credit_float
+                    elif debit_float != 0:
+                        amount_float = debit_float
+                        logger.debug(f"💡 Usando DebitAmount ({debit_float}) ao invés de CreditAmount na linha {line.get('LineNumber', 'N/A')}")
+                    else:
+                        amount_float = 0.0
+                        logger.warning(f"⚠️ Nenhum valor encontrado (CreditAmount ou DebitAmount) na linha {line.get('LineNumber', 'N/A')}")
+                    
+                    # Extrair UnitPrice
+                    unit_price = line.get('UnitPrice', 0)
+                    try:
+                        unit_price_float = float(str(unit_price).replace(",", ".")) if unit_price else 0.0
+                    except (ValueError, TypeError):
+                        unit_price_float = 0.0
+                    
+                    # Extrair Quantity
+                    quantity = line.get('Quantity', 0)
+                    try:
+                        quantity_float = float(str(quantity).replace(",", ".")) if quantity else 0.0
+                    except (ValueError, TypeError):
+                        quantity_float = 0.0
+                    
+                    # Extrair TaxPercentage
+                    tax_percentage = line_tax.get('TaxPercentage', 0)
+                    try:
+                        tax_percentage_float = float(str(tax_percentage).replace(",", ".")) if tax_percentage else 0.0
+                    except (ValueError, TypeError):
+                        tax_percentage_float = 0.0
+                    
                     fatura["Lines"].append({
                         "LineNumber": int(line.get('LineNumber', 0)),
                         "ProductCode": line.get('ProductCode', ''),
                         "Description": line.get('Description', ''),
-                        "Quantity": float(line.get('Quantity', 0)),
-                        "UnitPrice": float(line.get('UnitPrice', 0)),
-                        "CreditAmount": float(line.get('CreditAmount', 0)),
-                        "TaxPercentage": float(line_tax.get('TaxPercentage', 0)),
-                        # Calcular PriceWithIva com base no CreditAmount + TaxPercentage %
-                        "PriceWithIva": (float(line.get('CreditAmount', 0)) * (1 + float(line_tax.get('TaxPercentage', 0)) / 100)), # Usar CreditAmount como PriceWithIva
-                        "Iva":(float(line.get('CreditAmount', 0)) * (float(line_tax.get('TaxPercentage', 0)) / 100))
+                        "Quantity": quantity_float,
+                        "UnitPrice": unit_price_float,
+                        "CreditAmount": amount_float,  # Pode ser DebitAmount convertido
+                        "TaxPercentage": tax_percentage_float,
+                        # Calcular PriceWithIva com base no amount + TaxPercentage %
+                        "PriceWithIva": (amount_float * (1 + tax_percentage_float / 100)),
+                        "Iva": (amount_float * (tax_percentage_float / 100))
                     })
+                
+                # Atualizar NCReason na fatura após processar todas as linhas
+                # Se não houver referências, deixar como None
+                fatura["NCReason"] = nc_reason_data
             
             saft_data["faturas"].append(fatura)
         
@@ -611,6 +729,7 @@ def process_and_insert_invoice_batch(file_path: Path):
                 "payment_amount": float(str(fatura["PaymentAmount"]).replace(",", ".")),
                 "tax_type": fatura["TaxType"],
                 "customer_data": fatura["CustomerData"],
+                "nc_reason": fatura.get("NCReason"),  # JSON com primeira referência e motivo: {"fatura_ref": "...", "reason": "..."}
                 "active": True  # Novas invoices são ativas por padrão
             })
             
@@ -1376,7 +1495,8 @@ def process_single_xml_file(xml_file_path: str):
 
 @celery_app.task
 def download_and_queue_sftp_files():
-    """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais"""
+    """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais
+    IMPORTANTE: Processa FRs primeiro, depois NCs para evitar inconsistências"""
     logger.info("🔄 Iniciando download de arquivos SFTP...")
 
     download_and_queue_opengcs_files_sync()
@@ -1389,31 +1509,87 @@ def download_and_queue_sftp_files():
             logger.info("Nenhum arquivo XML encontrado no SFTP")
             return {"status": "success", "message": "Nenhum arquivo para processar", "queued_tasks": 0}
         
-        # Limitar número de arquivos processados por vez
-        files_to_process = downloaded_files[:MAX_FILES_PER_BATCH]
-        remaining_files = len(downloaded_files) - len(files_to_process)
+        # Separar arquivos por tipo (FR primeiro, depois NC)
+        fr_files = []
+        nc_files = []
         
-        # Criar tarefa individual para cada arquivo (limitado)
-        queued_tasks = []
-        for xml_file in files_to_process:
-            # Criar tarefa individual no Celery
-            task = process_single_xml_file.delay(xml_file)
+        for xml_file in downloaded_files:
+            filename = os.path.basename(xml_file)
+            file_type = invoice_fr_or_nc(filename)
             
+            if file_type == "FR":
+                fr_files.append(xml_file)
+            elif file_type == "NC":
+                nc_files.append(xml_file)
+            else:
+                logger.warning(f"⚠️ Tipo de arquivo desconhecido: {filename}, será processado como FR")
+                fr_files.append(xml_file)
+        
+        logger.info(f"📊 Arquivos separados: {len(fr_files)} FRs, {len(nc_files)} NCs")
+        
+        # Limitar número de arquivos processados por vez (aplicar limite separadamente)
+        fr_to_process = fr_files[:MAX_FILES_PER_BATCH]
+        nc_to_process = nc_files[:MAX_FILES_PER_BATCH]
+        
+        remaining_fr = len(fr_files) - len(fr_to_process)
+        remaining_nc = len(nc_files) - len(nc_to_process)
+        
+        queued_tasks = []
+        
+        # PROCESSAR PRIMEIRO TODAS AS FRs (Faturas Regulares) - SEQUENCIALMENTE
+        # Isso garante que todas as FRs sejam processadas antes das NCs
+        logger.info(f"📄 Processando {len(fr_to_process)} arquivos FR primeiro (sequencialmente)...")
+        fr_results = []
+        for i, xml_file in enumerate(fr_to_process, 1):
+            logger.info(f"🔄 Processando FR {i}/{len(fr_to_process)}: {os.path.basename(xml_file)}")
+            try:
+                # Processar de forma síncrona para garantir ordem
+                result = process_single_xml_file(xml_file)
+                fr_results.append({
+                    "file": xml_file,
+                    "status": result.get("status", "unknown"),
+                    "type": "FR"
+                })
+                logger.info(f"✅ FR {i}/{len(fr_to_process)} concluída: {result.get('status', 'unknown')}")
+            except Exception as e:
+                logger.error(f"❌ Erro ao processar FR {i}/{len(fr_to_process)}: {str(e)}")
+                fr_results.append({
+                    "file": xml_file,
+                    "status": "error",
+                    "error": str(e),
+                    "type": "FR"
+                })
+        
+        logger.info(f"✅ Todas as {len(fr_to_process)} tarefas FR foram concluídas")
+        
+        # AGORA PROCESSAR AS NCs (Notas de Crédito) - PODE SER PARALELO
+        logger.info(f"📝 Processando {len(nc_to_process)} arquivos NC após conclusão das FRs...")
+        nc_tasks = []
+        for xml_file in nc_to_process:
+            # Criar tarefa individual no Celery (pode processar em paralelo)
+            task = process_single_xml_file.delay(xml_file)
+            nc_tasks.append(task)
             queued_tasks.append({
                 "file": xml_file,
-                "task_id": task.id
+                "task_id": task.id,
+                "type": "NC"
             })
-            logger.info(f"📋 Tarefa criada para: {xml_file} (ID: {task.id})")
+            logger.info(f"📋 Tarefa NC criada para: {os.path.basename(xml_file)} (ID: {task.id})")
         
-        logger.info(f"✅ {len(queued_tasks)} tarefas criadas para processamento")
+        # Adicionar resultados das FRs processadas
+        queued_tasks.extend(fr_results)
+        
+        logger.info(f"✅ {len(queued_tasks)} tarefas criadas para processamento ({len(fr_to_process)} FRs + {len(nc_to_process)} NCs)")
         
         return {
             "status": "success", 
-            "message": f"{len(queued_tasks)} arquivos baixados e tarefas criadas (limite: {MAX_FILES_PER_BATCH})",
+            "message": f"{len(fr_to_process)} FRs processadas primeiro, depois {len(nc_to_process)} NCs (limite: {MAX_FILES_PER_BATCH})",
             "queued_tasks": len(queued_tasks),
+            "fr_files": len(fr_to_process),
+            "nc_files": len(nc_to_process),
+            "remaining_fr": remaining_fr,
+            "remaining_nc": remaining_nc,
             "total_files": len(downloaded_files),
-            "processed_files": len(files_to_process),
-            "remaining_files": remaining_files,
             "tasks": queued_tasks
         }
         
