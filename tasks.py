@@ -61,18 +61,18 @@ def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> O
     return None
 
 def extract_filial_from_filename(filename: str) -> str:
-    """Extrai a filial do nome do arquivo (ex: FR202Y2025_7-Gramido -> Gramido)"""
+    """Extrai a filial do nome do arquivo (ex: FR202Y2025_7-Gramido -> Gramido ou NC202Y2025_7-Gramido -> Gramido)"""
     try:
         if not filename:
             return ""
         
-        # Procurar por padrão FR + números + Y + números + _ + números + - + nome_filial
+        # Procurar por padrão FR ou NC + números + Y + números + _ + números + - + nome_filial
         import re
-        pattern = r'FR\d+Y\d+_\d+-(.+)'
+        pattern = r'(FR|NC)\d+Y\d+_\d+-(.+)'
         match = re.search(pattern, filename)
         
         if match:
-            filial = match.group(1)
+            filial = match.group(2)
             # Remover extensão .xml se existir
             filial = filial.replace('.xml', '')
             logger.info(f"✅ Filial extraída: {filial} do arquivo: {filename}")
