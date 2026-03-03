@@ -295,7 +295,7 @@ def health_check():
         }), 500
 
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/home', methods=['GET'])
 def get():
     return jsonify({
             "status": "healthy",
