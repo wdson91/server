@@ -24,6 +24,7 @@ def read_xml_file_with_encoding(xml_file_path: str, file_type: str = "XML") -> O
     
     logger.error(f"❌ Não foi possível ler o arquivo {file_type} com nenhuma codificação: {encodings}")
     return None
+
 def extract_filial_from_filename(filename: str) -> str:
     """Extrai a filial do nome do arquivo (ex: FR202Y2025_7-Gramido -> Gramido ou NC202Y2025_7-Gramido -> Gramido)"""
     try:
@@ -492,36 +493,42 @@ def parse_opengcs_xml_to_json(xml_file_path: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Erro ao processar XML OpenGCs {xml_file_path}: {str(e)}")
         return None
+
 def extract_nif_from_filename(filename: str) -> str:
     """Extrai o NIF do nome do arquivo opengcs-{nif}-{filial}"""
     try:
+        basename = os.path.basename(filename)
         # Padrão: opengcs-{nif}-{filial}
-        if filename.startswith('opengcs-') and filename.endswith('.xml'):
-            # 1. Remove a extensão .xml (ou qualquer outra extensão)
-            nome_sem_extensao = filename.rsplit('.', 1)[0]
+        if basename.startswith('opengcs-'):
+            # 1. Remove a extensão .xml (ou qualquer outra extensão) se existir
+            nome_sem_extensao = basename.rsplit('.', 1)[0] if '.' in basename else basename
             
-            # 2. Faz o split pelo "-" e pega a última parte (a filial sempre está depois do último "-")
-            filial = nome_sem_extensao.split("-")[  1]
-           
-            return filial
+            # 2. Faz o split pelo "-" e pega o NIF
+            parts = nome_sem_extensao.split("-")
+            if len(parts) >= 2:
+                nif = parts[1]
+                if nif:
+                    return nif
+            return ""
         else:
             logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
             return ""
     except Exception as e:
         logger.error(f"❌ Erro ao extrair NIF de {filename}: {str(e)}")
         return ""
+
 def extract_opengcs_filial_from_filename(filename: str) -> str:
     """Extrai a filial do nome do arquivo opengcs-{nif}-{filial}"""
-    print(filename)
-    
     try:
+        basename = os.path.basename(filename)
         # Padrão: opengcs-{nif}-{filial}
-        if filename.startswith('opengcs-') and filename.endswith('.xml'):
-            nome_sem_extensao = filename.rsplit('.', 1)[0]
+        if basename.startswith('opengcs-'):
+            nome_sem_extensao = basename.rsplit('.', 1)[0] if '.' in basename else basename
             
-       
-            return  nome_sem_extensao[18:]
-            
+            parts = nome_sem_extensao.split("-")
+            if len(parts) >= 3:
+                return "-".join(parts[2:])
+            return ""
         else:
             logger.warning(f"⚠️ Padrão de arquivo OpenGCs não reconhecido: {filename}")
             return ""
