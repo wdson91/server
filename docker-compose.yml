@@ -36,6 +36,7 @@ services:
       retries: 3
 
   celery-beat:
+    build: .
     image: local/server-app:latest
     command: celery -A celery_config.celery_app beat --loglevel=info
     volumes:
@@ -62,6 +63,7 @@ services:
     restart: unless-stopped
 
   flask-app:
+    build: .
     image: local/server-app:latest
     ports:
       - "8000:8000"
