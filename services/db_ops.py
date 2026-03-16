@@ -8,7 +8,11 @@ import pytz
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from utils.xml_parser import extract_references_from_nc_xml
+from utils.xml_parser import (
+    extract_references_from_nc_xml,
+    extract_nif_from_filename,
+    extract_opengcs_filial_from_filename
+)
 
 logger = logging.getLogger(__name__)
 load_dotenv()
