@@ -13,7 +13,7 @@ from flask_caching import Cache
 # Importar Celery
 
 from celery_config import celery_app
-from tasks import download_and_queue_sftp_files, process_single_xml_file, download_and_queue_opengcs_files, process_single_opengcs_file
+from tasks import download_and_queue_sftp_files, process_single_opengcs_file, download_and_queue_opengcs_files_sync
 from sftp_upload import upload_xml_to_sftp
 
 from utils.supabaseUtil import get_supabase

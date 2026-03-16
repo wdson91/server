@@ -160,6 +160,7 @@ def download_and_queue_opengcs_files():
 
 
 
+@celery_app.task
 def process_single_xml_file(xml_file_path: str):
 
     try:
@@ -180,18 +181,8 @@ def process_single_xml_file(xml_file_path: str):
             json_data = parse_xml_to_json(xml_file_path)
             
             if json_data:
-                # Salvar JSON processado
-                pasta_dados_processados = './dados_processados'
-                os.makedirs(pasta_dados_processados, exist_ok=True)
-                
-                json_filename = Path(xml_file_path).stem + '.json'
-                json_path = os.path.join(pasta_dados_processados, json_filename)
-                
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    json.dump(json_data, f, ensure_ascii=False, indent=2)
-                
-                # Processar e inserir no Supabase usando inserção em lote
-                insertion_success = process_and_insert_invoice_batch(Path(json_path))
+                # Processar e inserir no Supabase usando dicionário de memória
+                insertion_success = process_and_insert_invoice_batch(json_data)
                 
                 if insertion_success and nc_result["status"] in ["success", "warning"]:
                     # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida E o processamento de referências foi OK
@@ -206,7 +197,6 @@ def process_single_xml_file(xml_file_path: str):
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo NC XML")
-                    remove_file_safely(json_path, "Arquivo JSON")
                     
                     logger.info(f"✅ Arquivo NC processado e salvo com sucesso: {xml_file_path}")
                     return {
@@ -273,19 +263,8 @@ def process_single_xml_file(xml_file_path: str):
             json_data = parse_xml_to_json(xml_file_path)
             
             if json_data:
-                # Salvar JSON processado
-                pasta_dados_processados = './dados_processados'
-                os.makedirs(pasta_dados_processados, exist_ok=True)
-                
-                json_filename = Path(xml_file_path).stem + '.json'
-                json_path = os.path.join(pasta_dados_processados, json_filename)
-                
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    json.dump(json_data, f, ensure_ascii=False, indent=2)
-                
-                
                 # Processar e inserir no Supabase usando inserção em lote
-                insertion_success = process_and_insert_invoice_batch(Path(json_path))
+                insertion_success = process_and_insert_invoice_batch(json_data)
                 
                 if insertion_success:
                     # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
@@ -300,7 +279,6 @@ def process_single_xml_file(xml_file_path: str):
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo XML")
-                    remove_file_safely(json_path, "Arquivo JSON")
                     
                     #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {

@@ -49,7 +49,7 @@ def extract_filial_from_filename(filename: str) -> str:
         logger.error(f"❌ Erro ao extrair filial de {filename}: {str(e)}")
         return ""
 def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
-    """Converte arquivo XML para JSON"""
+    """Converte arquivo XML para as estruturas de lote do Supabase"""
     try:
         logger.info(f"🔄 Processando XML: {xml_file_path}")
         
@@ -62,15 +62,16 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
         xml_dict = xmltodict.parse(xml_content)
         logger.info(f"✅ XML convertido para dict com sucesso")
         
-        # Extrair dados relevantes do SAFT
         saft_data = {
             "arquivo_origem": os.path.basename(xml_file_path),
             "data_processamento": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat(),
             "total_faturas": 0,
-            "faturas": []
+            "companies_batch": [],
+            "filiais_batch": [],
+            "invoices_batch": [],
+            "lines_by_invoice": {}
         }
         
-        # Processar dados do SAFT (estrutura básica)
         if 'AuditFile' in xml_dict:
             audit_file = xml_dict['AuditFile']
             logger.info(f"✅ AuditFile encontrado no XML")
@@ -78,7 +79,6 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             logger.warning(f"⚠️ AuditFile não encontrado no XML")
             return None
             
-        # Extrair informações da empresa do Header
         company_data = {
             "CompanyID": "",
             "CompanyName": "",
@@ -101,39 +101,37 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
                 "Country": header.get('CompanyAddress', {}).get('Country', ''),
                 "SoftwareCertificateNumber": header.get('SoftwareCertificateNumber', ''),
                 "ProductCompanyTaxID": header.get('ProductCompanyTaxID', '')
-               
             }
 
         customer_data = {
-                    "CustomerID": "Desconhecido",
-                    "AccountID": "",
-                    "CustomerTaxID": "",
-                    "CompanyName": "",
-                    "PostalCode": "",
-                    "AddressDetail": "",
-                    "City": ""
-                }
+            "CustomerID": "Desconhecido",
+            "AccountID": "",
+            "CustomerTaxID": "",
+            "CompanyName": "",
+            "PostalCode": "",
+            "AddressDetail": "",
+            "City": ""
+        }
         if "MasterFiles" in audit_file:
-            master_files  = audit_file["MasterFiles"]["Customer"]
-        
-            if master_files.get('CustomerID') != 999999990:
+            master_files = audit_file["MasterFiles"].get("Customer", {})
+            if isinstance(master_files, list):
+                master_files = master_files[0] if master_files else {}
+            
+            if master_files.get('CustomerID') != 999999990 and master_files.get('CustomerID'):
                 customer_data = {
-                    "CustomerID": master_files.get('CustomerID','Desconhecido'),
-                    "AccountID": master_files.get('AccountID','Desconhecido'),
-                    "CustomerTaxID": master_files.get('CustomerTaxID','Desconhecido'),
-                    "CompanyName": master_files.get('CompanyName','Desconhecido'),
-                    "PostalCode": master_files.get('BillingAddress',{}).get('PostalCode','Desconhecido'),
-                    "AddressDetail": master_files.get('BillingAddress',{}).get('AddressDetail','Desconhecido'),
-                    "City": master_files.get('BillingAddress',{}).get('City','Desconhecido'),
+                    "CustomerID": master_files.get('CustomerID', 'Desconhecido'),
+                    "AccountID": master_files.get('AccountID', 'Desconhecido'),
+                    "CustomerTaxID": master_files.get('CustomerTaxID', 'Desconhecido'),
+                    "CompanyName": master_files.get('CompanyName', 'Desconhecido'),
+                    "PostalCode": master_files.get('BillingAddress', {}).get('PostalCode', 'Desconhecido'),
+                    "AddressDetail": master_files.get('BillingAddress', {}).get('AddressDetail', 'Desconhecido'),
+                    "City": master_files.get('BillingAddress', {}).get('City', 'Desconhecido'),
                 }
                 
-        # Extrair faturas
         if 'SourceDocuments' in audit_file:
             source_docs = audit_file['SourceDocuments']
-            
             if 'SalesInvoices' in source_docs:
                 sales_invoices = source_docs['SalesInvoices']
-                
                 if 'Invoice' in sales_invoices:
                     invoices = sales_invoices['Invoice'] if isinstance(sales_invoices['Invoice'], list) else [sales_invoices['Invoice']]
                 else:
@@ -146,208 +144,204 @@ def parse_xml_to_json(xml_file_path: str) -> Optional[dict]:
             logger.warning(f"⚠️ SourceDocuments não encontrado no XML")
             return saft_data
         
+        companies_seen = set()
+        filiais_seen = set()
         
         for invoice in invoices:
-            # Extrair dados do DocumentStatus
             document_status = invoice.get('DocumentStatus', {})
             invoice_status_date = document_status.get('InvoiceStatusDate', '')
             
-            # Extrair dados do DocumentTotals
             document_totals = invoice.get('DocumentTotals', {})
             payments = document_totals.get('Payment', {})
             if isinstance(payments, list):
                 payment = [x for x in payments]
             
-            # Extrair dados do Line (pode ser lista ou dict)
             line_data = invoice.get('Line', {})
             if isinstance(line_data, list):
                 line_data = line_data[0] if line_data else {}
             tax_data = line_data.get('Tax', {}) if line_data else {}
             
-            # Extrair filial do nome do arquivo
             filename = os.path.basename(xml_file_path)
             filial = extract_filial_from_filename(filename)
             
-            # Inicializar variáveis para armazenar primeira referência e motivo (para notas de crédito)
-            nc_reason_data = None  # Será um dict: {"fatura_ref": "...", "reason": "..."}
+            nc_reason_data = None
             
-            # Tratar Hash que pode ser None ou string vazia
             hash_value = invoice.get('Hash') or ''
             if hash_value and isinstance(hash_value, str) and len(hash_value) > 30:
                 hash_extract = hash_value[0] + hash_value[10] + hash_value[20] + hash_value[30]
             else:
                 hash_extract = hash_value if (hash_value and isinstance(hash_value, str)) else ''
+                
+            company_id = str(company_data.get("CompanyID") or "")
+            if company_id and company_id not in companies_seen:
+                saft_data["companies_batch"].append({
+                    "company_id": company_id,
+                    "company_name": str(company_data.get("CompanyName") or ""),
+                    "address_detail": str(company_data.get("AddressDetail") or ""),
+                    "city": str(company_data.get("City") or ""),
+                    "postal_code": str(company_data.get("PostalCode") or ""),
+                    "country": str(company_data.get("Country") or "")
+                })
+                companies_seen.add(company_id)
+                
+            if filial and filial not in filiais_seen:
+                saft_data["filiais_batch"].append({
+                    "filial_id": str(filial),
+                    "filial_number": str(filial),
+                    "company_id": company_id,
+                    "nome": str(company_data.get("CompanyName") or ""),
+                    "endereco": str(company_data.get("AddressDetail") or ""),
+                    "cidade": str(company_data.get("City") or ""),
+                    "codigo_postal": str(company_data.get("PostalCode") or ""),
+                    "pais": str(company_data.get("Country") or "")
+                })
+                filiais_seen.add(filial)
+                
+            customer_data_with_tax = customer_data.copy() if customer_data else {}
+            product_company_tax_id = company_data.get("ProductCompanyTaxID", "")
+            if product_company_tax_id:
+                customer_data_with_tax["ProductCompanyTaxID"] = str(product_company_tax_id)
+                
+            invoice_no = str(invoice.get('InvoiceNo', '')).strip()
+            if not invoice_no:
+                logger.error(f"❌ InvoiceNo vazio ou None na fatura")
+                continue
+                
+            payment_methods = payments
+            if payment_methods is None:
+                payment_methods = None
+            elif not isinstance(payment_methods, (dict, list)):
+                payment_methods = str(payment_methods)
             
-            fatura = {
-                "CompanyID": company_data["CompanyID"],
-                "CompanyName": company_data["CompanyName"],
-                "AddressDetail": company_data["AddressDetail"],
-                "City": company_data["City"],
-                "PostalCode": company_data["PostalCode"],
-                "Country": company_data["Country"],
-                "CertificateNumber": company_data["SoftwareCertificateNumber"],
-                "ProductCompanyTaxID": company_data["ProductCompanyTaxID"],  # Novo campo para DE
-                "InvoiceNo": invoice.get('InvoiceNo', ''),
-                "Filial": filial,  # Novo campo filial
-                "ATCUD": invoice.get('ATCUD', ''),
-                "CustomerID": invoice.get('CustomerID', ''),
-                "InvoiceDate": invoice.get('InvoiceDate', ''),
-                "InvoiceStatusDate_Date": invoice_status_date.split('T')[0] if invoice_status_date and 'T' in invoice_status_date else '',
-                "InvoiceStatusDate_Time": invoice_status_date.split('T')[1] if invoice_status_date and 'T' in invoice_status_date else '',
-                "HashExtract": hash_extract,
-                "EndDate": invoice.get('EndDate', ''),
-                "TaxPayable": float(document_totals.get('TaxPayable', 0)),
-                "NetTotal": float(document_totals.get('NetTotal', 0)),
-                "GrossTotal": float(document_totals.get('GrossTotal', 0)),
-                "PaymentMethod": payments,
-                "PaymentAmount": float(document_totals.get('GrossTotal', 0)),
-                "TaxType": tax_data.get('TaxType', '') if tax_data else '',
-                "CustomerData": customer_data,
-                "NCReason": nc_reason_data,  # JSON com primeira referência e motivo: {"fatura_ref": "...", "reason": "..."}
-                "Lines": []
-            }
+            lines = invoice.get('Line', [])
+            if not isinstance(lines, list):
+                lines = [lines]
+                
+            current_lines = []
             
-            # Processar linhas da fatura
-            if 'Line' in invoice:
-                lines = invoice['Line'] if isinstance(invoice['Line'], list) else [invoice['Line']]
-                for line in lines:
-                    line_tax = line.get('Tax', {})
+            for line in lines:
+                line_tax = line.get('Tax', {})
+                if 'References' in line and nc_reason_data is None:
+                    references_data = line.get('References', {})
+                    reason_value = ""
+                    first_reference = ""
                     
-                    # Extrair References e Reason das linhas (para notas de crédito)
-                    # Apenas a primeira referência e motivo encontrados serão salvos
-                    if 'References' in line and nc_reason_data is None:
-                        references_data = line.get('References', {})
-                        reason_value = ""
-                        first_reference = ""
-                        
-                        # References pode ser dict ou lista
-                        if isinstance(references_data, dict):
-                            # Extrair Reason
-                            if 'Reason' in references_data:
-                                reason_value = references_data.get('Reason', '')
-                                # Reason pode ser string direta ou dict com #text
+                    if isinstance(references_data, dict):
+                        if 'Reason' in references_data:
+                            reason_value = references_data.get('Reason', '')
+                            if isinstance(reason_value, dict) and '#text' in reason_value:
+                                reason_value = reason_value['#text']
+                            if reason_value and isinstance(reason_value, str):
+                                reason_value = reason_value.strip()
+                        if 'Reference' in references_data:
+                            ref = references_data.get('Reference', '')
+                            if isinstance(ref, list) and len(ref) > 0:
+                                r = ref[0]
+                                if isinstance(r, str):
+                                    first_reference = r.strip()
+                                elif isinstance(r, dict) and '#text' in r:
+                                    first_reference = r['#text'].strip()
+                            elif isinstance(ref, str):
+                                first_reference = ref.strip()
+                            elif isinstance(ref, dict) and '#text' in ref:
+                                first_reference = ref['#text'].strip()
+                    elif isinstance(references_data, list) and len(references_data) > 0:
+                        ref_item = references_data[0]
+                        if isinstance(ref_item, dict):
+                            if 'Reason' in ref_item:
+                                reason_value = ref_item.get('Reason', '')
                                 if isinstance(reason_value, dict) and '#text' in reason_value:
                                     reason_value = reason_value['#text']
                                 if reason_value and isinstance(reason_value, str):
                                     reason_value = reason_value.strip()
-                            
-                            # Extrair primeira Reference
-                            if 'Reference' in references_data:
-                                ref = references_data.get('Reference', '')
-                                # Reference pode ser lista, string ou dict
-                                if isinstance(ref, list) and len(ref) > 0:
-                                    # Pegar apenas o primeiro
-                                    r = ref[0]
-                                    if isinstance(r, str):
-                                        first_reference = r.strip()
-                                    elif isinstance(r, dict) and '#text' in r:
-                                        first_reference = r['#text'].strip()
-                                elif isinstance(ref, str):
+                            if 'Reference' in ref_item:
+                                ref = ref_item.get('Reference', '')
+                                if isinstance(ref, str):
                                     first_reference = ref.strip()
                                 elif isinstance(ref, dict) and '#text' in ref:
                                     first_reference = ref['#text'].strip()
+                    if first_reference:
+                        nc_reason_data = {
+                            "fatura_ref": first_reference,
+                            "reason": reason_value if reason_value else ""
+                        }
                         
-                        elif isinstance(references_data, list) and len(references_data) > 0:
-                            # Se References é uma lista, pegar apenas o primeiro item
-                            ref_item = references_data[0]
-                            if isinstance(ref_item, dict):
-                                # Extrair Reason
-                                if 'Reason' in ref_item:
-                                    reason_value = ref_item.get('Reason', '')
-                                    if isinstance(reason_value, dict) and '#text' in reason_value:
-                                        reason_value = reason_value['#text']
-                                    if reason_value and isinstance(reason_value, str):
-                                        reason_value = reason_value.strip()
-                                
-                                # Extrair Reference
-                                if 'Reference' in ref_item:
-                                    ref = ref_item.get('Reference', '')
-                                    if isinstance(ref, str):
-                                        first_reference = ref.strip()
-                                    elif isinstance(ref, dict) and '#text' in ref:
-                                        first_reference = ref['#text'].strip()
-                        
-                        # Salvar apenas a primeira referência encontrada
-                        if first_reference:
-                            nc_reason_data = {
-                                "fatura_ref": first_reference,
-                                "reason": reason_value if reason_value else ""
-                            }
-                            logger.info(f"📝 Primeira referência encontrada na linha {line.get('LineNumber', 'N/A')}: {first_reference} - Motivo: {reason_value if reason_value else 'N/A'}")
-                    
-                    # Nas notas de crédito, o valor pode estar em DebitAmount ao invés de CreditAmount
-                    # Verificar ambos os campos e usar o que existir e não for zero
-                    credit_amount = line.get('CreditAmount', 0) or 0
-                    debit_amount = line.get('DebitAmount', 0) or 0
-                    
-                    # Converter ambos para float para comparação
-                    try:
-                        credit_float = float(str(credit_amount).replace(",", ".")) if credit_amount else 0.0
-                    except (ValueError, TypeError):
-                        credit_float = 0.0
-                    
-                    try:
-                        debit_float = float(str(debit_amount).replace(",", ".")) if debit_amount else 0.0
-                    except (ValueError, TypeError):
-                        debit_float = 0.0
-                    
-                    # Usar CreditAmount se existir e não for zero, senão usar DebitAmount
-                    if credit_float != 0:
-                        amount_float = credit_float
-                    elif debit_float != 0:
-                        amount_float = debit_float
-                        logger.debug(f"💡 Usando DebitAmount ({debit_float}) ao invés de CreditAmount na linha {line.get('LineNumber', 'N/A')}")
-                    else:
-                        amount_float = 0.0
-                        logger.warning(f"⚠️ Nenhum valor encontrado (CreditAmount ou DebitAmount) na linha {line.get('LineNumber', 'N/A')}")
-                    
-                    # Extrair UnitPrice
-                    unit_price = line.get('UnitPrice', 0)
-                    try:
-                        unit_price_float = float(str(unit_price).replace(",", ".")) if unit_price else 0.0
-                    except (ValueError, TypeError):
-                        unit_price_float = 0.0
-                    
-                    # Extrair Quantity
-                    quantity = line.get('Quantity', 0)
-                    try:
-                        quantity_float = float(str(quantity).replace(",", ".")) if quantity else 0.0
-                    except (ValueError, TypeError):
-                        quantity_float = 0.0
-                    
-                    # Extrair TaxPercentage
-                    tax_percentage = line_tax.get('TaxPercentage', 0)
-                    try:
-                        tax_percentage_float = float(str(tax_percentage).replace(",", ".")) if tax_percentage else 0.0
-                    except (ValueError, TypeError):
-                        tax_percentage_float = 0.0
-                    
-                    fatura["Lines"].append({
-                        "LineNumber": int(line.get('LineNumber', 0)),
-                        "ProductCode": line.get('ProductCode', ''),
-                        "Description": line.get('Description', ''),
-                        "Quantity": quantity_float,
-                        "UnitPrice": unit_price_float,
-                        "CreditAmount": amount_float,  # Pode ser DebitAmount convertido
-                        "TaxPercentage": tax_percentage_float,
-                        # Calcular PriceWithIva com base no amount + TaxPercentage %
-                        "PriceWithIva": (amount_float * (1 + tax_percentage_float / 100)),
-                        "Iva": (amount_float * (tax_percentage_float / 100))
-                    })
+                credit_amount = line.get('CreditAmount', 0) or 0
+                debit_amount = line.get('DebitAmount', 0) or 0
+                try:
+                    credit_float = float(str(credit_amount).replace(",", ".")) if credit_amount else 0.0
+                except (ValueError, TypeError):
+                    credit_float = 0.0
+                try:
+                    debit_float = float(str(debit_amount).replace(",", ".")) if debit_amount else 0.0
+                except (ValueError, TypeError):
+                    debit_float = 0.0
                 
-                # Atualizar NCReason na fatura após processar todas as linhas
-                # Se não houver referências, deixar como None
-                fatura["NCReason"] = nc_reason_data
+                amount_float = credit_float if credit_float != 0 else debit_float
+                
+                unit_price = line.get('UnitPrice', 0)
+                try:
+                    unit_price_float = float(str(unit_price).replace(",", ".")) if unit_price else 0.0
+                except (ValueError, TypeError):
+                    unit_price_float = 0.0
+                
+                quantity = line.get('Quantity', 0)
+                try:
+                    quantity_float = float(str(quantity).replace(",", ".")) if quantity else 0.0
+                except (ValueError, TypeError):
+                    quantity_float = 0.0
+                
+                tax_percentage = line_tax.get('TaxPercentage', 0)
+                try:
+                    tax_percentage_float = float(str(tax_percentage).replace(",", ".")) if tax_percentage else 0.0
+                except (ValueError, TypeError):
+                    tax_percentage_float = 0.0
+                
+                current_lines.append({
+                    "line_number": int(line.get('LineNumber', 0)),
+                    "product_code": str(line.get('ProductCode', '')),
+                    "description": str(line.get('Description', '')),
+                    "quantity": quantity_float,
+                    "unit_price": float(round(unit_price_float, 4)),
+                    "credit_amount": amount_float,
+                    "tax_percentage": tax_percentage_float,
+                    "price_with_iva": float(str(amount_float * (1 + tax_percentage_float / 100)).replace(",", ".")),
+                    "iva": float(round(amount_float * (tax_percentage_float / 100), 4))
+                })
             
-            saft_data["faturas"].append(fatura)
-        
-        saft_data["total_faturas"] = len(saft_data["faturas"])
-        logger.info(f"✅ Processamento concluído: {saft_data['total_faturas']} faturas extraídas")
+            saft_data["invoices_batch"].append({
+                "invoice_no": invoice_no,
+                "filial": filial,
+                "atcud": invoice.get('ATCUD') or None,
+                "company_id": company_id,
+                "customer_id": invoice.get('CustomerID') or None,
+                "invoice_date": invoice.get('InvoiceDate') if invoice.get('InvoiceDate') else None,
+                "invoice_status_date": invoice_status_date.split('T')[0] if invoice_status_date and 'T' in invoice_status_date else None,
+                "invoice_status_time": invoice_status_date.split('T')[1] if invoice_status_date and 'T' in invoice_status_date else None,
+                "hash_extract": hash_extract or None,
+                "end_date": invoice.get('EndDate') if invoice.get('EndDate') else None,
+                "tax_payable": float(document_totals.get('TaxPayable', 0) or 0),
+                "certificate_number": company_data.get("SoftwareCertificateNumber") or None,
+                "net_total": float(document_totals.get('NetTotal', 0) or 0),
+                "gross_total": float(document_totals.get('GrossTotal', 0) or 0),
+                "payment_methods": payment_methods,
+                "payment_amount": float(str(document_totals.get('GrossTotal', 0) or 0).replace(",", ".")),
+                "tax_type": tax_data.get('TaxType') or None,
+                "customer_data": customer_data_with_tax if customer_data_with_tax else None,
+                "nc_reason": nc_reason_data,
+                "active": True
+            })
+            saft_data["lines_by_invoice"][invoice_no] = current_lines
+            
+        saft_data["total_faturas"] = len(saft_data["invoices_batch"])
+        logger.info(f"✅ Processamento concluído: {saft_data['total_faturas']} faturas mapeadas para DB")
        
         return saft_data
         
     except Exception as e:
         logger.error(f"Erro ao processar XML {xml_file_path}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None
 def extract_references_from_nc_xml(xml_file_path: str) -> list:
     """Extrai referências de faturas de um arquivo NC (Nota de Crédito)"""
