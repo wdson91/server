@@ -20,3 +20,5 @@ parse_xml_to_json.py
 *.json
 *.xml
 index.py
+/tutoriais
+/tests

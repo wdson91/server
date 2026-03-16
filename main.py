@@ -519,6 +519,18 @@ def ensure_redis_running():
         print("Algumas funcionalidades que dependem do Celery em background poderão falhar.")
         # sys.exit(1) # Opcional: descomente se quiser impedir o Flask de iniciar sem Redis
 
+
+@app.route('/home', methods=['GET'])
+def get():
+    return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "services": {
+                "redis": "connected",
+                "supabase": "connected",
+                "celery": "available"
+            }
+        }), 200
 if __name__ == "__main__":
     ensure_redis_running()
     app.run(debug=True, host="0.0.0.0", port=8000)

@@ -17,7 +17,7 @@ def start_celery_worker():
         # Comando para iniciar o worker
         cmd = [
             "celery", "-A", "celery_config.celery_app", 
-            "worker", "--loglevel=info", "--concurrency=2"
+            "worker", "--loglevel=info", "--concurrency=1"
         ]
         
         process = subprocess.Popen(cmd)
