@@ -16,3 +16,9 @@ teste.py
 parse_xml_to_json.py
 /tutoriais
 /tests
+*.lua
+*.json
+*.xml
+index.py
+/tutoriais
+/tests
