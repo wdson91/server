@@ -41,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=3s \
 # (Você precisa de criar uma rota /health na sua API que retorne status 200 OK)
 
 # Comando para iniciar o servidor de produção
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["gunicorn", "-w", "3", "--threads", "2", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "100", "-b", "0.0.0.0:8000", "main:app"] 

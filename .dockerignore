@@ -1,0 +1,25 @@
+.git
+.gitignore
+.env
+.pytest_cache
+.vercel
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+celerybeat-schedule
+
+# Artefatos e dados locais
+downloads
+dados_processados
+
+# Testes e docs não necessários em runtime
+tests
+tutoriais
+test_*.py
+test_*.json
+README.md
+banco.sql
+deploy.sh
