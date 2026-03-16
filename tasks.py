@@ -111,7 +111,6 @@ def process_single_opengcs_file(xml_file_path: str):
         return {"status": "error", "file": xml_file_path, "message": str(e)}
 
 @celery_app.task
-@celery_app.task
 def download_and_queue_opengcs_files():
     """Tarefa Celery para baixar arquivos OpenGCs SFTP e criar tarefas individuais"""
 
@@ -144,11 +143,8 @@ def download_and_queue_opengcs_files():
         for xml_file in files_to_process:
             # Criar tarefa individual no Celery
             result = process_single_opengcs_file(xml_file)
-            result = process_single_opengcs_file(xml_file)
             queued_tasks.append({
                 "file": xml_file,
-                "task_id": result.get("task_id", None),
-                "status": result.get("status", "unknown")
                 "task_id": result.get("task_id", None),
                 "status": result.get("status", "unknown")
             })
@@ -182,17 +178,14 @@ def process_single_xml_file(xml_file_path: str):
 
     try:
         file_existis(xml_file_path)
-        file_existis(xml_file_path)
         
         # Verificar se é um arquivo NC (Nota de Crédito)
         filename = os.path.basename(xml_file_path)
         file_type = invoice_fr_or_nc(filename)
         
-        if file_type=='NC':
-            # Processar arquivo NC (extrair referências e deletar faturas referenciadas)
         file_type = invoice_fr_or_nc(filename)
         
-        if file_type=='NC':
+        if file_type == 'NC':
             # Processar arquivo NC (extrair referências e deletar faturas referenciadas)
             nc_result = process_nc_file(xml_file_path)
             
@@ -281,7 +274,6 @@ def process_single_xml_file(xml_file_path: str):
         
         # Processar arquivo FR (Fatura Regular)
         elif file_type == "FR":   
-        elif file_type == "FR":   
             # Converter XML para JSON
             json_data = parse_xml_to_json(xml_file_path)
             
@@ -298,9 +290,7 @@ def process_single_xml_file(xml_file_path: str):
                     
                     if sftp_deleted:
                          logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
-                         logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
                     else:
-                         logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                          logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
@@ -326,30 +316,18 @@ def process_single_xml_file(xml_file_path: str):
                     }
             else:
                 #logger.error(f"❌ Falha ao processar: {xml_file_path}")
-                #logger.error(f"❌ Falha ao processar: {xml_file_path}")
                 return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}
         else:
-             
-             return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}  
-        else:
-             
-             return {"status": "error", "file": xml_file_path, "type": "FR", "message": "Falha na conversão XML"}  
+             return {"status": "error", "file": xml_file_path, "type": "UNKNOWN", "message": "Tipo desconhecido"}  
     except Exception as e:
-        #logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
         #logger.error(f"Erro ao processar {xml_file_path}: {str(e)}")
         return {"status": "error", "file": xml_file_path, "message": str(e)}
 
 @celery_app.task
-@celery_app.task
 def download_and_queue_sftp_files():
     """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais
     IMPORTANTE: Processa FRs primeiro, depois NCs para evitar inconsistências"""
-    """Tarefa Celery para baixar arquivos SFTP e criar tarefas individuais
-    IMPORTANTE: Processa FRs primeiro, depois NCs para evitar inconsistências"""
     logger.info("🔄 Iniciando download de arquivos SFTP...")
-
-    download_and_queue_opengcs_files_sync()
-
 
     download_and_queue_opengcs_files_sync()
 
@@ -361,30 +339,7 @@ def download_and_queue_sftp_files():
             logger.info("Nenhum arquivo XML encontrado no SFTP")
             return {"status": "success", "message": "Nenhum arquivo para processar", "queued_tasks": 0}
         
-        # Separar arquivos por tipo (FR primeiro, depois NC)
-        fr_files = []
-        nc_files = []
-        
-        for xml_file in downloaded_files:
-            filename = os.path.basename(xml_file)
-            file_type = invoice_fr_or_nc(filename)
-            
-            if file_type == "FR":
-                fr_files.append(xml_file)
-            elif file_type == "NC":
-                nc_files.append(xml_file)
-            else:
-                logger.warning(f"⚠️ Tipo de arquivo desconhecido: {filename}, será processado como FR")
-                fr_files.append(xml_file)
-        
-        logger.info(f"📊 Arquivos separados: {len(fr_files)} FRs, {len(nc_files)} NCs")
-        
-        # Limitar número de arquivos processados por vez (aplicar limite separadamente)
-        fr_to_process = fr_files[:MAX_FILES_PER_BATCH]
-        nc_to_process = nc_files[:MAX_FILES_PER_BATCH]
-        
-        remaining_fr = len(fr_files) - len(fr_to_process)
-        remaining_nc = len(nc_files) - len(nc_to_process)
+ 
         
         # Separar arquivos por tipo (FR primeiro, depois NC)
         fr_files = []
@@ -412,38 +367,7 @@ def download_and_queue_sftp_files():
         remaining_nc = len(nc_files) - len(nc_to_process)
         
         queued_tasks = []
-        
-        # PROCESSAR PRIMEIRO TODAS AS FRs (Faturas Regulares) - SEQUENCIALMENTE
-        # Isso garante que todas as FRs sejam processadas antes das NCs
-        logger.info(f"📄 Processando {len(fr_to_process)} arquivos FR primeiro (sequencialmente)...")
-        fr_results = []
-        for i, xml_file in enumerate(fr_to_process, 1):
-            logger.info(f"🔄 Processando FR {i}/{len(fr_to_process)}: {os.path.basename(xml_file)}")
-            try:
-                # Processar de forma síncrona para garantir ordem
-                result = process_single_xml_file(xml_file)
-                fr_results.append({
-                    "file": xml_file,
-                    "status": result.get("status", "unknown"),
-                    "type": "FR"
-                })
-                logger.info(f"✅ FR {i}/{len(fr_to_process)} concluída: {result.get('status', 'unknown')}")
-            except Exception as e:
-                logger.error(f"❌ Erro ao processar FR {i}/{len(fr_to_process)}: {str(e)}")
-                fr_results.append({
-                    "file": xml_file,
-                    "status": "error",
-                    "error": str(e),
-                    "type": "FR"
-                })
-        
-        logger.info(f"✅ Todas as {len(fr_to_process)} tarefas FR foram concluídas")
-        
-        # AGORA PROCESSAR AS NCs (Notas de Crédito) - PODE SER PARALELO
-        logger.info(f"📝 Processando {len(nc_to_process)} arquivos NC após conclusão das FRs...")
-        nc_tasks = []
-        for xml_file in nc_to_process:
-            # Criar tarefa individual no Celery (pode processar em paralelo)
+
         
         # PROCESSAR PRIMEIRO TODAS AS FRs (Faturas Regulares) - SEQUENCIALMENTE
         # Isso garante que todas as FRs sejam processadas antes das NCs
@@ -478,21 +402,13 @@ def download_and_queue_sftp_files():
             # Criar tarefa individual no Celery (pode processar em paralelo)
             task = process_single_xml_file.delay(xml_file)
             nc_tasks.append(task)
-            nc_tasks.append(task)
             queued_tasks.append({
                 "file": xml_file,
                 "task_id": task.id,
                 "type": "NC"
-                "task_id": task.id,
-                "type": "NC"
             })
             logger.info(f"📋 Tarefa NC criada para: {os.path.basename(xml_file)} (ID: {task.id})")
-            logger.info(f"📋 Tarefa NC criada para: {os.path.basename(xml_file)} (ID: {task.id})")
         
-        # Adicionar resultados das FRs processadas
-        queued_tasks.extend(fr_results)
-        
-        logger.info(f"✅ {len(queued_tasks)} tarefas criadas para processamento ({len(fr_to_process)} FRs + {len(nc_to_process)} NCs)")
         # Adicionar resultados das FRs processadas
         queued_tasks.extend(fr_results)
         
@@ -501,12 +417,7 @@ def download_and_queue_sftp_files():
         return {
             "status": "success", 
             "message": f"{len(fr_to_process)} FRs processadas primeiro, depois {len(nc_to_process)} NCs (limite: {MAX_FILES_PER_BATCH})",
-            "message": f"{len(fr_to_process)} FRs processadas primeiro, depois {len(nc_to_process)} NCs (limite: {MAX_FILES_PER_BATCH})",
             "queued_tasks": len(queued_tasks),
-            "fr_files": len(fr_to_process),
-            "nc_files": len(nc_to_process),
-            "remaining_fr": remaining_fr,
-            "remaining_nc": remaining_nc,
             "fr_files": len(fr_to_process),
             "nc_files": len(nc_to_process),
             "remaining_fr": remaining_fr,
@@ -520,7 +431,6 @@ def download_and_queue_sftp_files():
         return {"status": "error", "message": str(e)}
 
 
-@celery_app.task
 @celery_app.task
 def cleanup_files_task():
     """Tarefa Celery para limpeza programada de arquivos"""
