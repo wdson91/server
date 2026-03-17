@@ -311,8 +311,9 @@ def get():
         }), 200
 
 from tasks import async_upload_xml_to_sftp
-@app.route("/send-file", methods=["POST"])
-def send_file():
+
+@app.route("/receive-file", methods=["POST"])
+def receive_file():
     import xml.etree.ElementTree as ET
     import json as _json
     try:
@@ -411,9 +412,10 @@ def upload_saft_chunk():
             body = raw.decode("utf-8")
         except UnicodeDecodeError:
             body = raw.decode("latin-1")
-            
+         
         try:
             data = _json.loads(body)
+            print(data)
         except _json.JSONDecodeError:
             return jsonify({"status": "error", "message": "Body JSON inválido"}), 400
 
