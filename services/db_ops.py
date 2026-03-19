@@ -200,7 +200,7 @@ def insert_invoices_batch(invoices_data):
             try:
                 response = supabase.table("invoices").upsert(
                     invoices_data[0],
-                    on_conflict="invoice_no"
+                    on_conflict="invoice_no,company_id"
                 ).execute()
             except Exception as e:
                 logger.error(f"❌ Erro ao inserir fatura individual: {str(e)}")
@@ -208,7 +208,7 @@ def insert_invoices_batch(invoices_data):
         else:
             response = supabase.table("invoices").upsert(
                 invoices_data,
-                on_conflict="invoice_no"
+                on_conflict="invoice_no,company_id"
             ).execute()
         
         if response.data:
@@ -294,13 +294,18 @@ def process_and_insert_invoice_batch(data: dict):
 
             invoice_mapping = {}
             for invoice in invoices_response.data:
-                invoice_mapping[invoice["invoice_no"]] = invoice["id"]
+                # Criar chave composta para garantir que não misturamos faturas de clientes diferentes
+                comp_key = f"{invoice['invoice_no']}_{invoice.get('company_id', '')}"
+                invoice_mapping[comp_key] = invoice["id"]
 
             lines_batch = []
             
             for fatura_obj in invoices_batch:
                 inv_no = fatura_obj["invoice_no"]
-                invoice_id = invoice_mapping.get(inv_no)
+                comp_id = fatura_obj.get("company_id", "")
+                
+                comp_key = f"{inv_no}_{comp_id}"
+                invoice_id = invoice_mapping.get(comp_key)
                 
                 if invoice_id:
                     existing_lines = supabase.table("invoice_lines").select("line_number").eq("invoice_id", invoice_id).execute()
