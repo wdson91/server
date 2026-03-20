@@ -218,6 +218,10 @@ def insert_invoices_batch(invoices_data):
     except Exception as e:
         logger.error(f"❌ Erro ao inserir faturas em lote: {str(e)}")
         return None
+
+
+
+        
 def insert_invoice_lines_batch(lines_data):
     """Insere linhas de faturas em lote"""
     try:

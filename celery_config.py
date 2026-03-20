@@ -40,7 +40,7 @@ import tasks
 celery_app.conf.beat_schedule = {
     'download-sftp-and-queue-files-every-5-minutes': {
         'task': 'tasks.download_and_queue_sftp_files',
-        'schedule': 90.0,  # 5 minutos
+        'schedule': 180.0,  # 3 minutos
     },
     # 'download-opengcs-and-queue-files-every-5-minutes': {
     #     'task': 'tasks.download_and_queue_opengcs_files',

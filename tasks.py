@@ -34,7 +34,6 @@ def cleanup_processed_files():
             for xml_file in xml_files:
                 file_path = os.path.join(downloads_dir, xml_file)
                 #remove_file_safely(file_path, "Arquivo XML")
-                #remove_file_safely(file_path, "Arquivo XML")
         
         # Limpar pasta dados_processados (arquivos JSON)
         dados_dir = './dados_processados'
@@ -42,7 +41,6 @@ def cleanup_processed_files():
             json_files = [f for f in os.listdir(dados_dir) if f.endswith('.json')]
             for json_file in json_files:
                 file_path = os.path.join(dados_dir, json_file)
-                #remove_file_safely(file_path, "Arquivo JSON")
                 #remove_file_safely(file_path, "Arquivo JSON")
                     
         logger.info("🧹 Limpeza automática concluída")
@@ -53,11 +51,6 @@ def cleanup_processed_files():
 def process_single_opengcs_file(xml_file_path: str):
     """Tarefa Celery para processar um arquivo OpenGCs individual"""
     logger.info(f"🔄 Iniciando processamento do arquivo OpenGCs: {xml_file_path}")
-    
-
-    
-
-    
     try:
         # Verificar se arquivo existe
         if not os.path.exists(xml_file_path):
@@ -82,7 +75,6 @@ def process_single_opengcs_file(xml_file_path: str):
                 #     logger.warning(f"⚠️ Falha ao excluir arquivo OpenGCs do SFTP: {os.path.basename(xml_file_path)}")
                 
                 # Remover arquivo local após processamento bem-sucedido
-               # remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
                # remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
                 
                 logger.info(f"✅ Arquivo OpenGCs processado com sucesso: {xml_file_path}")
@@ -113,12 +105,6 @@ def process_single_opengcs_file(xml_file_path: str):
 @celery_app.task
 def download_and_queue_opengcs_files():
     """Tarefa Celery para baixar arquivos OpenGCs SFTP e criar tarefas individuais"""
-
-
-    
-
-
-    
     logger.info("🔄 Iniciando download de arquivos OpenGCs SFTP...")
     
     try:
@@ -167,22 +153,14 @@ def download_and_queue_opengcs_files():
 
 
 
-
-@celery_app.task
-
-
-
 @celery_app.task
 def process_single_xml_file(xml_file_path: str):
-
-
+    """Processa um arquivo XML individual (FR ou NC)"""
     try:
         file_existis(xml_file_path)
         
         # Verificar se é um arquivo NC (Nota de Crédito)
         filename = os.path.basename(xml_file_path)
-        file_type = invoice_fr_or_nc(filename)
-        
         file_type = invoice_fr_or_nc(filename)
         
         if file_type == 'NC':
@@ -296,7 +274,6 @@ def process_single_xml_file(xml_file_path: str):
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo XML")
                     
-                    #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     #logger.info(f"✅ Arquivo processado com sucesso: {xml_file_path}")
                     return {
                         "status": "success", 

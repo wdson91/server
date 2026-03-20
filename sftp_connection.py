@@ -73,9 +73,11 @@ def download_files_from_sftp():
                 for arquivo in arquivos_pasta:
                     if arquivo.endswith('.xml') and (arquivo.startswith('FR') or arquivo.startswith('NC')):
                         caminho_remoto = f'{caminho_pasta_nif}/{arquivo}'
-                        caminho_local = os.path.join(pasta_local, arquivo)
+                        # Adicionar o NIF (pasta_nif) ao nome do ficheiro local para evitar sobrerposições de clientes diferentes!
+                        nome_local_seguro = f"{pasta_nif}_{arquivo}"
+                        caminho_local = os.path.join(pasta_local, nome_local_seguro)
                         
-                        logger.info(f'📥 Baixando {arquivo} da pasta {pasta_nif}...')
+                        logger.info(f'📥 Baixando {arquivo} da pasta {pasta_nif} como {nome_local_seguro}...')
                         sftp.get(caminho_remoto, caminho_local)
                         downloaded_files.append(caminho_local)
                         
