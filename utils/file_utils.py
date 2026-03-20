@@ -18,5 +18,16 @@ def file_existis(xml_path):
     if not os.path.exists(xml_path):
         return {"status": "error", "file": xml_path, "message": "Arquivo não encontrado"}
 
+def strip_nif_prefix(filename):
+    """Remove o prefixo NIF do nome do ficheiro se existir (ex: '514151900_FR...' -> 'FR...')"""
+    import re
+    # Padrão: NIF (números ou B+números) seguido de underscore
+    match = re.match(r'^[A-Z]?\d+_(.+)$', filename)
+    if match:
+        return match.group(1)
+    return filename
+
 def invoice_fr_or_nc(filename):
-    return filename[0:2]
+    """Detecta se o ficheiro é FR ou NC, mesmo com prefixo NIF"""
+    clean_name = strip_nif_prefix(filename)
+    return clean_name[0:2]
