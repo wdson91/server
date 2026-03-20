@@ -312,15 +312,19 @@ def process_and_insert_invoice_batch(data: dict):
                 invoice_id = invoice_mapping.get(comp_key)
                 
                 if invoice_id:
-                    existing_lines = supabase.table("invoice_lines").select("line_number").eq("invoice_id", invoice_id).execute()
-                    existing_line_numbers = {line["line_number"] for line in existing_lines.data} if existing_lines.data else set()
+                    # IMPORTANTE: Apagar TODAS as linhas antigas desta fatura antes de inserir as novas!
+                    # Isto garante que quando uma fatura é reprocessada (upsert), as linhas antigas
+                    # não ficam "presas" na base de dados com dados corrompidos ou desatualizados.
+                    existing_lines = supabase.table("invoice_lines").select("id").eq("invoice_id", invoice_id).execute()
+                    if existing_lines.data and len(existing_lines.data) > 0:
+                        logger.info(f"🗑️ Apagando {len(existing_lines.data)} linhas antigas da fatura {inv_no} (empresa {comp_id}) antes de reinserir...")
+                        supabase.table("invoice_lines").delete().eq("invoice_id", invoice_id).execute()
                     
                     if inv_no in lines_by_invoice:
                         for linha in lines_by_invoice[inv_no]:
-                            if linha["line_number"] not in existing_line_numbers:
-                                linha_with_invoice_id = linha.copy()
-                                linha_with_invoice_id["invoice_id"] = invoice_id
-                                lines_batch.append(linha_with_invoice_id)
+                            linha_with_invoice_id = linha.copy()
+                            linha_with_invoice_id["invoice_id"] = invoice_id
+                            lines_batch.append(linha_with_invoice_id)
 
                     existing_link = supabase.table("invoice_file_links").select("id").eq("invoice_id", invoice_id).eq("invoice_file_id", file_id).execute()
                     if not existing_link.data:
