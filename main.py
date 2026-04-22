@@ -16,7 +16,8 @@ from celery_config import celery_app
 from tasks import download_and_queue_sftp_files, process_single_opengcs_file, download_and_queue_opengcs_files_sync
 from sftp_upload import upload_xml_to_sftp
 
-from utils.supabaseUtil import get_supabase
+from utils.db import engine, Session
+from sqlalchemy import text
 
 # Configuração
 load_dotenv()
@@ -30,7 +31,6 @@ app.config.from_mapping({
     'CACHE_DEFAULT_TIMEOUT': 180,
 })
 cache = Cache(app)
-supabase = get_supabase()
 TZ = pytz.timezone('Europe/Lisbon')
 
 # Endpoint para baixar arquivos SFTP e criar tarefas individuais
@@ -275,17 +275,16 @@ def health_check():
         r = redis.from_url(redis_url)
         r.ping()
         
-        # Verificar conexão com Supabase
-        supabase = get_supabase()
-        # Teste simples de conexão
-        response = supabase.table("companies").select("company_id").limit(1).execute()
+        # Verificar conexão com PostgreSQL via SQLAlchemy
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
             "services": {
                 "redis": "connected",
-                "supabase": "connected",
+                "database": "connected",
                 "celery": "available"
             }
         }), 200
@@ -305,7 +304,7 @@ def get():
             "timestamp": datetime.now().isoformat(),
             "services": {
                 "redis": "connected",
-                "supabase": "connected",
+                "database": "connected",
                 "celery": "available"
             }
         }), 200

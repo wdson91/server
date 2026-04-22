@@ -11,7 +11,7 @@ from celery import chain
 # Importar as novas referências
 from utils.xml_parser import parse_xml_to_json, parse_opengcs_xml_to_json
 from utils.file_utils import remove_file_safely, file_existis, invoice_fr_or_nc
-from services.db_ops import process_and_insert_invoice_batch, process_nc_file, insert_opengcs_to_supabase
+from services.db_ops import process_and_insert_invoice_batch, process_nc_file, insert_opengcs_to_db
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -62,7 +62,7 @@ def process_single_opengcs_file(xml_file_path: str):
         
         if json_data:
             # Inserir no Supabase
-            insertion_success = insert_opengcs_to_supabase(json_data, xml_file_path)
+            insertion_success = insert_opengcs_to_db(json_data, xml_file_path)
             
             if insertion_success:
                 # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
@@ -179,14 +179,14 @@ def process_single_xml_file(xml_file_path: str):
                 
                 if insertion_success and nc_result["status"] in ["success", "warning"]:
                     # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida E o processamento de referências foi OK
-                    logger.info(f"🗑️ Excluindo arquivo NC do SFTP após processamento bem-sucedido: {xml_file_path}")
+                    # logger.info(f"🗑️ Excluindo arquivo NC do SFTP após processamento bem-sucedido: {xml_file_path}")
                 
-                    sftp_deleted = delete_file_from_sftp(xml_file_path)
+                    # sftp_deleted = delete_file_from_sftp(xml_file_path)
                     
-                    if sftp_deleted:
-                        logger.info(f"✅ Arquivo NC excluído do SFTP com sucesso: {filename}")
-                    else:
-                        logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
+                    # if sftp_deleted:
+                    #     logger.info(f"✅ Arquivo NC excluído do SFTP com sucesso: {filename}")
+                    # else:
+                    #     logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo NC XML")
@@ -261,15 +261,15 @@ def process_single_xml_file(xml_file_path: str):
                 
                 if insertion_success:
                     # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
-                    logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
+                    # logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
                 
                 
-                    sftp_deleted = delete_file_from_sftp(xml_file_path)
+                    # sftp_deleted = delete_file_from_sftp(xml_file_path)
                     
-                    if sftp_deleted:
-                         logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
-                    else:
-                         logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
+                    # if sftp_deleted:
+                    #      logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                    # else:
+                    #      logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo XML")

@@ -5,8 +5,9 @@ import re
 from pathlib import Path
 from datetime import datetime
 import pytz
-from dotenv import load_dotenv
-from supabase import create_client, Client
+from sqlalchemy import text, insert, table, column, JSON
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from utils.db import engine, Session
 
 from utils.xml_parser import (
     extract_references_from_nc_xml,
@@ -15,500 +16,289 @@ from utils.xml_parser import (
 )
 
 logger = logging.getLogger(__name__)
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("SUPABASE_URL e SUPABASE_KEY devem estar definidos no .env")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def insert_companies_batch(companies_data):
-    """Insere empresas em lote"""
-    try:
-        if not companies_data:
-            logger.warning("⚠️ Nenhuma empresa para inserir")
-            return None
-        
-        logger.info(f"🏢 Tentando inserir {len(companies_data)} empresas...")
-        
-        if len(companies_data) == 1:
-            try:
-                response = supabase.table("companies").upsert(
-                    companies_data[0],
-                    on_conflict="company_id"
-                ).execute()
-            except Exception as e:
-                logger.error(f"❌ Erro ao inserir empresa individual: {str(e)}")
-                raise
-        else:
-            response = supabase.table("companies").upsert(
-                companies_data,
-                on_conflict="company_id"
-            ).execute()
-        
-        if response.data:
-            logger.info(f"✅ {len(response.data)} empresas inseridas/atualizadas")
-            
-        return response
-    except Exception as e:
-        logger.error(f"❌ Erro ao inserir empresas em lote: {str(e)}")
+    """Insere empresas em lote usando SQLAlchemy ON CONFLICT"""
+    if not companies_data:
         return None
+    
+    try:
+        session = Session()
+        stmt = pg_insert(text("companies"))
         
-        logger.info(f"🏢 Tentando inserir {len(companies_data)} empresas...")
-        
-        # Limpar dados antes de inserir
-        cleaned_companies = []
+        # O Prisma define company_id como chave primária
+        tbl = table("companies", column("company_id"), column("nome"), column("nif"), column("morada"), column("cp"), column("cidade"))
         for company in companies_data:
-            cleaned = clean_data_for_insertion(company)
-            # Garantir que todos os campos são strings ou None
-            for key, value in cleaned.items():
-                if value is not None and not isinstance(value, str):
-                    cleaned[key] = str(value)
-            cleaned_companies.append(cleaned)
+            insert_stmt = pg_insert(tbl).values(**company)
+            upsert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['company_id'],
+                set_={k: v for k, v in company.items() if k != 'company_id'}
+            )
+            session.execute(upsert_stmt)
         
-        # Log dos dados limpos para debug (apenas primeiro item)
-        if cleaned_companies:
-            try:
-                logger.info(f"📋 Exemplo de dados de empresa limpos: {json.dumps(cleaned_companies[0], default=str, ensure_ascii=False)}")
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao logar dados: {str(e)}")
-        
-        # Tentar inserir um por um primeiro para identificar problemas
-        if len(cleaned_companies) == 1:
-            # Se for apenas um, tentar inserir diretamente
-            try:
-                response = supabase.table("companies").upsert(
-                    cleaned_companies[0],
-                    on_conflict="company_id"
-                ).execute()
-            except Exception as e:
-                logger.error(f"❌ Erro ao inserir empresa individual: {str(e)}")
-                logger.error(f"📋 Dados que causaram erro: {json.dumps(cleaned_companies[0], default=str, ensure_ascii=False)}")
-                raise
-        else:
-            # Usar upsert para evitar duplicatas
-            response = supabase.table("companies").upsert(
-                cleaned_companies,
-                on_conflict="company_id"
-            ).execute()
-        
-        if response.data:
-            logger.info(f"✅ {len(response.data)} empresas inseridas/atualizadas")
-        else:
-            logger.warning("⚠️ Nenhuma empresa foi inserida")
-            
-        return response
-        
+        session.commit()
+        logger.info(f"✅ {len(companies_data)} empresas inseridas/atualizadas")
+        return True
     except Exception as e:
         logger.error(f"❌ Erro ao inserir empresas em lote: {str(e)}")
+        if 'session' in locals(): session.rollback()
         return None
+    finally:
+        if 'session' in locals(): Session.remove()
+
 def insert_filiais_batch(filiais_data):
-    """Insere filiais em lote"""
-    try:
-        if not filiais_data:
-            logger.warning("⚠️ Nenhuma filial para inserir")
-            return None
-        
-        logger.info(f"🏪 Tentando inserir {len(filiais_data)} filiais...")
-        
-        if len(filiais_data) == 1:
-            try:
-                response = supabase.table("filiais").upsert(
-                    filiais_data[0],
-                    on_conflict="filial_number"
-                ).execute()
-            except Exception as e:
-                logger.error(f"❌ Erro ao inserir filial individual: {str(e)}")
-                raise
-        else:
-            response = supabase.table("filiais").upsert(
-                filiais_data,
-                on_conflict="filial_number"
-            ).execute()
-        
-        if response.data:
-            logger.info(f"✅ {len(response.data)} filiais inseridas/atualizadas")
-            
-        return response
-    except Exception as e:
-        logger.error(f"❌ Erro ao inserir filiais em lote: {str(e)}")
+    """Insere filiais em lote usando SQLAlchemy ON CONFLICT"""
+    if not filiais_data:
         return None
-        
-        logger.info(f"🏪 Tentando inserir {len(filiais_data)} filiais...")
-        
-        # Limpar dados antes de inserir
-        cleaned_filiais = []
+    
+    try:
+        session = Session()
         for filial in filiais_data:
-            cleaned = clean_data_for_insertion(filial)
-            # Garantir que nome não seja None (campo NOT NULL)
-            if cleaned.get("nome") is None:
-                cleaned["nome"] = ""
-            # Garantir que todos os campos são strings ou None
-            for key, value in cleaned.items():
-                if value is not None and not isinstance(value, str):
-                    cleaned[key] = str(value)
-            cleaned_filiais.append(cleaned)
-        
-        # Log dos dados limpos para debug
-        if cleaned_filiais:
-            try:
-                logger.info(f"📋 Exemplo de dados de filial limpos: {json.dumps(cleaned_filiais[0], default=str, ensure_ascii=False)}")
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao logar dados: {str(e)}")
-        
-        # Tentar inserir um por um primeiro para identificar problemas
-        if len(cleaned_filiais) == 1:
-            try:
-                response = supabase.table("filiais").upsert(
-                    cleaned_filiais[0],
-                    on_conflict="filial_number"
-                ).execute()
-            except Exception as e:
-                logger.error(f"❌ Erro ao inserir filial individual: {str(e)}")
-                logger.error(f"📋 Dados que causaram erro: {json.dumps(cleaned_filiais[0], default=str, ensure_ascii=False)}")
-                raise
-        else:
-            # Usar upsert para evitar duplicatas baseado no filial_number que é único
-            response = supabase.table("filiais").upsert(
-                cleaned_filiais,
-                on_conflict="filial_number"
-            ).execute()
-        
-        if response.data:
-            logger.info(f"✅ {len(response.data)} filiais inseridas/atualizadas")
-        else:
-            logger.warning("⚠️ Nenhuma filial foi inserida")
+            # Garantir campos obrigatórios
+            if not filial.get("nome"):
+                filial["nome"] = "Filial sem nome"
             
-        return response
-        
+            tbl = table("filiais", column("filial_number"), column("nome"), column("company_id"))
+            insert_stmt = pg_insert(tbl).values(**filial)
+            # O Prisma define filial_number como único
+            upsert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['filial_number'],
+                set_={k: v for k, v in filial.items() if k != 'filial_number'}
+            )
+            session.execute(upsert_stmt)
+            
+        session.commit()
+        logger.info(f"✅ {len(filiais_data)} filiais inseridas/atualizadas")
+        return True
     except Exception as e:
         logger.error(f"❌ Erro ao inserir filiais em lote: {str(e)}")
+        if 'session' in locals(): session.rollback()
         return None
+    finally:
+        if 'session' in locals(): Session.remove()
+
 def insert_invoices_batch(invoices_data):
-    """Insere faturas em lote"""
+    """Insere faturas em lote usando SQLAlchemy ON CONFLICT"""
+    if not invoices_data:
+        return None
+    
     try:
-        if not invoices_data:
-            logger.warning("⚠️ Nenhuma fatura para inserir")
-            return None
-        
-        logger.info(f"📄 Tentando inserir {len(invoices_data)} faturas...")
-        
-        if len(invoices_data) == 1:
-            try:
-                response = supabase.table("invoices").upsert(
-                    invoices_data[0],
-                    on_conflict="invoice_no,company_id"
-                ).execute()
-            except Exception as e:
-                logger.error(f"❌ Erro ao inserir fatura individual: {str(e)}")
-                raise
-        else:
-            response = supabase.table("invoices").upsert(
-                invoices_data,
-                on_conflict="invoice_no,company_id"
-            ).execute()
-        
-        if response.data:
-            logger.info(f"✅ {len(response.data)} faturas inseridas/atualizadas")
+        session = Session()
+        results = []
+        for invoice in invoices_data:
+            tbl = table("invoices", 
+                        column("invoice_no"), column("company_id"), column("filial_number"),
+                        column("invoice_date"), column("customer_id"), column("tax_payable"),
+                        column("net_total"), column("gross_total"), column("active"),
+                        column("language"))
+            insert_stmt = pg_insert(tbl).values(**invoice)
+            # O Prisma define @@unique([invoice_no, company_id])
+            upsert_stmt = insert_stmt.on_conflict_do_update(
+                index_elements=['invoice_no', 'company_id'],
+                set_={k: v for k, v in invoice.items() if k not in ['invoice_no', 'company_id']}
+            ).returning(text("id"), text("invoice_no"), text("company_id"))
             
-        return response
+            res = session.execute(upsert_stmt).fetchone()
+            if res:
+                results.append({"id": str(res[0]), "invoice_no": res[1], "company_id": res[2]})
+        
+        session.commit()
+        logger.info(f"✅ {len(invoices_data)} faturas inseridas/atualizadas")
+        return results # Retornamos os IDs para mapeamento de linhas
     except Exception as e:
         logger.error(f"❌ Erro ao inserir faturas em lote: {str(e)}")
+        if 'session' in locals(): session.rollback()
         return None
+    finally:
+        if 'session' in locals(): Session.remove()
 
-
-
-        
 def insert_invoice_lines_batch(lines_data):
     """Insere linhas de faturas em lote"""
+    if not lines_data:
+        return
+    
     try:
-        if not lines_data:
-            return
-        
-        # Inserir linhas em lote
-        response = supabase.table("invoice_lines").insert(lines_data).execute()
-        
-        logger.info(f"✅ {len(lines_data)} linhas de faturas processadas em lote")
-        return response
-        
+        session = Session()
+        session.execute(text("INSERT INTO invoice_lines (invoice_id, line_number, product_code, description, quantity, unit_price, credit_amount, tax_percentage, price_with_iva, iva) VALUES (:invoice_id, :line_number, :product_code, :description, :quantity, :unit_price, :credit_amount, :tax_percentage, :price_with_iva, :iva)"), lines_data)
+        session.commit()
+        logger.info(f"✅ {len(lines_data)} linhas de faturas processadas")
     except Exception as e:
-        logger.error(f"Erro ao inserir linhas em lote: {str(e)}")
-        return None
+        logger.error(f"❌ Erro ao inserir linhas em lote: {str(e)}")
+        if 'session' in locals(): session.rollback()
+    finally:
+        if 'session' in locals(): Session.remove()
+
 def insert_file_links_batch(links_data):
     """Insere links de arquivos em lote"""
+    if not links_data:
+        return
+    
     try:
-        if not links_data:
-            return
-        
-        # Inserir links em lote
-        response = supabase.table("invoice_file_links").insert(links_data).execute()
-        
-        logger.info(f"✅ {len(links_data)} links de arquivos processados em lote")
-        return response
-        
+        session = Session()
+        session.execute(text("INSERT INTO invoice_file_links (invoice_file_id, invoice_id) VALUES (:invoice_file_id, :invoice_id)"), links_data)
+        session.commit()
+        logger.info(f"✅ {len(links_data)} links de arquivos processados")
     except Exception as e:
-        logger.error(f"Erro ao inserir links em lote: {str(e)}")
-        return None
-def process_and_insert_invoice_batch(data: dict):
-    """Processa e insere fatura no Supabase usando inserção em lote da memória"""
-    try:
-        logger.info(f"🔄 Iniciando inserção em lote na DB")
-        logger.info(f"📊 Dados recebidos: {data['total_faturas']} faturas")
+        logger.error(f"❌ Erro ao inserir links em lote: {str(e)}")
+        if 'session' in locals(): session.rollback()
+    finally:
+        if 'session' in locals(): Session.remove()
 
+def process_and_insert_invoice_batch(data: dict):
+    """Processa e insere fatura no banco usando transação SQLAlchemy"""
+    session = Session()
+    try:
+        logger.info(f"🔄 Iniciando inserção em lote na DB (PostgreSQL)")
+        
         companies_batch = data.get("companies_batch", [])
         filiais_batch = data.get("filiais_batch", [])
         invoices_batch = data.get("invoices_batch", [])
         lines_by_invoice = data.get("lines_by_invoice", {})
-        links_batch = []
         
+        # 1. Inserir Empresas
         if companies_batch:
-            logger.info(f"🏢 Inserindo {len(companies_batch)} empresas...")
             insert_companies_batch(companies_batch)
 
+        # 2. Inserir Filiais
         if filiais_batch:
-            logger.info(f"🏪 Inserindo {len(filiais_batch)} filiais...")
             insert_filiais_batch(filiais_batch)
 
-        logger.info(f"📄 Inserindo {len(invoices_batch)} faturas...")
-        invoices_response = insert_invoices_batch(invoices_batch)
+        # 3. Inserir Faturas e obter IDs (para associar linhas e arquivos)
+        invoices_results = insert_invoices_batch(invoices_batch)
         
-        if invoices_response and invoices_response.data:
-            existing_file = supabase.table("invoice_files").select("id").eq("filename", data["arquivo_origem"]).execute()
+        if invoices_results:
+            # 4. Inserir ou buscar arquivo
+            existing_file = session.execute(text("SELECT id FROM invoice_files WHERE filename = :filename"), {"filename": data["arquivo_origem"]}).fetchone()
             
-            if existing_file.data:
-                file_id = existing_file.data[0]["id"]
-                logger.info(f"ℹ️ Arquivo já existe com ID: {file_id}, reutilizando")
+            if existing_file:
+                file_id = str(existing_file[0])
+                logger.info(f"ℹ️ Arquivo já existe com ID: {file_id}")
             else:
-                logger.info("📝 Inserindo arquivo no banco (faturas foram inseridas)...")
-                file_insert = supabase.table("invoice_files").insert({
-                    "filename": data["arquivo_origem"],
-                    "data_processamento": data["data_processamento"],
-                    "total_faturas": data["total_faturas"]
-                }).execute()
-
-                if not file_insert.data:
-                    logger.error("❌ Erro: Resposta vazia ao inserir arquivo")
-                    return False
-
-                file_id = file_insert.data[0]["id"]
+                file_insert = session.execute(text("INSERT INTO invoice_files (filename, data_processamento, total_faturas) VALUES (:filename, :data_processamento, :total_faturas) RETURNING id"), 
+                                             {"filename": data["arquivo_origem"], "data_processamento": data["data_processamento"], "total_faturas": data["total_faturas"]}).fetchone()
+                file_id = str(file_insert[0])
                 logger.info(f"✅ Arquivo inserido com ID: {file_id}")
 
-            invoice_mapping = {}
-            for invoice in invoices_response.data:
-                # Criar chave composta para garantir que não misturamos faturas de clientes diferentes
-                comp_key = f"{invoice['invoice_no']}_{invoice.get('company_id', '')}"
-                invoice_mapping[comp_key] = invoice["id"]
-
+            # 5. Mapear IDs das faturas para inserir linhas
+            invoice_mapping = {f"{res['invoice_no']}_{res['company_id']}": res['id'] for res in invoices_results}
+            
             lines_batch = []
+            links_batch = []
             
             for fatura_obj in invoices_batch:
                 inv_no = fatura_obj["invoice_no"]
                 comp_id = fatura_obj.get("company_id", "")
-                
                 comp_key = f"{inv_no}_{comp_id}"
                 invoice_id = invoice_mapping.get(comp_key)
                 
                 if invoice_id:
-                    # IMPORTANTE: Apagar TODAS as linhas antigas desta fatura antes de inserir as novas!
-                    # Isto garante que quando uma fatura é reprocessada (upsert), as linhas antigas
-                    # não ficam "presas" na base de dados com dados corrompidos ou desatualizados.
-                    existing_lines = supabase.table("invoice_lines").select("id").eq("invoice_id", invoice_id).execute()
-                    if existing_lines.data and len(existing_lines.data) > 0:
-                        logger.info(f"🗑️ Apagando {len(existing_lines.data)} linhas antigas da fatura {inv_no} (empresa {comp_id}) antes de reinserir...")
-                        supabase.table("invoice_lines").delete().eq("invoice_id", invoice_id).execute()
+                    # Apagar linhas antigas (como no original)
+                    session.execute(text("DELETE FROM invoice_lines WHERE invoice_id = :id"), {"id": invoice_id})
                     
                     if inv_no in lines_by_invoice:
                         for linha in lines_by_invoice[inv_no]:
-                            linha_with_invoice_id = linha.copy()
-                            linha_with_invoice_id["invoice_id"] = invoice_id
-                            lines_batch.append(linha_with_invoice_id)
+                            linha_with_id = linha.copy()
+                            linha_with_id["invoice_id"] = invoice_id
+                            lines_batch.append(linha_with_id)
 
-                    existing_link = supabase.table("invoice_file_links").select("id").eq("invoice_id", invoice_id).eq("invoice_file_id", file_id).execute()
-                    if not existing_link.data:
-                        links_batch.append({
-                            "invoice_file_id": file_id,
-                            "invoice_id": invoice_id
-                        })
-                else:
-                    logger.warning(f"⚠️ Fatura {inv_no} não foi inserida, linhas ignoradas")
+                    # Verificar se link já existe
+                    existing_link = session.execute(text("SELECT id FROM invoice_file_links WHERE invoice_id = :inv_id AND invoice_file_id = :file_id"), 
+                                                   {"inv_id": invoice_id, "file_id": file_id}).fetchone()
+                    if not existing_link:
+                        links_batch.append({"invoice_file_id": file_id, "invoice_id": invoice_id})
 
             if lines_batch:
-                logger.info(f"📋 Inserindo {len(lines_batch)} linhas de faturas...")
                 insert_invoice_lines_batch(lines_batch)
 
             if links_batch:
-                logger.info(f"🔗 Inserindo {len(links_batch)} links de arquivos...")
                 insert_file_links_batch(links_batch)
+            
+            session.commit()
+            logger.info(f"✅ Processamento DB concluído com sucesso")
+            return True
         else:
-            logger.error("❌ Falha ao inserir faturas, arquivo e linhas não serão inseridas")
+            logger.error("❌ Falha ao inserir faturas")
             return False
-
-        logger.info(f"✅ Processamento de memória DB inserido com sucesso")
-        return True
                 
     except Exception as e:
-        logger.error(f"Erro ao inserir dados no banco: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Erro ao inserir dados no banco: {str(e)}")
+        session.rollback()
         return False
+    finally:
+        Session.remove()
+
 def deactivate_invoice(invoice_no: str) -> bool:
-    """Desativa uma fatura (marca active = false) ao invés de deletar"""
+    """Desativa uma fatura (active = false)"""
     try:
-        logger.info(f"🔄 Iniciando desativação da fatura: {invoice_no}")
-        
-        # 1. Buscar a fatura pelo número
-        invoice_response = supabase.table("invoices").select("id, active").eq("invoice_no", invoice_no).execute()
-        
-        if not invoice_response.data:
-            logger.warning(f"⚠️ Fatura não encontrada: {invoice_no}")
-            return False
-        
-        invoice_id = invoice_response.data[0]["id"]
-        current_active = invoice_response.data[0].get("active", True)
-        
-        # Verificar se já está desativada
-        if current_active is False:
-            logger.info(f"ℹ️ Fatura {invoice_no} já está desativada")
+        session = Session()
+        result = session.execute(text("UPDATE invoices SET active = false WHERE invoice_no = :invoice_no"), {"invoice_no": invoice_no})
+        session.commit()
+        if result.rowcount > 0:
+            logger.info(f"✅ Fatura {invoice_no} desativada")
             return True
-        
-        logger.info(f"📋 Fatura encontrada com ID: {invoice_id}, status atual: active={current_active}")
-        
-        # 2. Atualizar a fatura para active = false
-        invoice_update = supabase.table("invoices").update({
-            "active": False
-        }).eq("id", invoice_id).execute()
-        
-        if invoice_update.data:
-            logger.info(f"✅ Fatura {invoice_no} desativada com sucesso (active = false)")
-            return True
-        else:
-            logger.error(f"❌ Falha ao desativar fatura {invoice_no}")
-            return False
-        
+        return False
     except Exception as e:
         logger.error(f"❌ Erro ao desativar fatura {invoice_no}: {str(e)}")
         return False
+    finally:
+        Session.remove()
+
 def process_nc_file(xml_file_path: str) -> dict:
-    """Processa arquivo NC (Nota de Crédito) e desativa faturas referenciadas (active = false)"""
+    """Processa arquivo NC e desativa faturas referenciadas"""
     try:        
-        # Extrair referências do arquivo NC
         references = extract_references_from_nc_xml(xml_file_path)
-        
         if not references:
-            logger.warning(f"⚠️ Nenhuma referência encontrada no arquivo NC: {xml_file_path}")
-            return {
-                "status": "warning",
-                "message": "Nenhuma referência encontrada",
-                "deactivated_invoices": [],
-                "failed_deactivations": []
-            }
+            return {"status": "warning", "message": "Nenhuma referência encontrada", "deactivated_invoices": [], "failed_deactivations": []}
         
-        deactivated_invoices = []
-        failed_deactivations = []
-        
-        # Processar cada referência
+        deactivated = []
+        failed = []
         for reference in references:
-            logger.info(f"🔍 Processando referência: {reference}")
-            
-            # Extrair número da fatura da referência (ex: "FR 201803Y2025/239")
-            # Padrão esperado: FR + espaços + números + Y + ano/número
-            invoice_pattern = r'FR\s+\d+Y\d{4}/\d+'
-            match = re.search(invoice_pattern, reference)
-            
+            match = re.search(r'FR\s+\d+Y\d{4}/\d+', reference)
             if match:
-                invoice_no = match.group(0)
-                
-                # Tentar desativar a fatura (marcar active = false)
-                if deactivate_invoice(invoice_no):
-                    deactivated_invoices.append(invoice_no)
+                inv_no = match.group(0)
+                if deactivate_invoice(inv_no):
+                    deactivated.append(inv_no)
                 else:
-                    failed_deactivations.append(invoice_no)
-            else:
-                logger.warning(f"⚠️ Padrão de fatura não reconhecido na referência: {reference}")
-                failed_deactivations.append(reference)
+                    failed.append(inv_no)
         
-        
-        return {
-            "status": "success",
-            "message": f"NC processado: {len(deactivated_invoices)} faturas desativadas, {len(failed_deactivations)} falhas",
-            "deactivated_invoices": deactivated_invoices,
-            "failed_deactivations": failed_deactivations,
-            "total_references": len(references)
-        }
-        
+        return {"status": "success", "deactivated_invoices": deactivated, "failed_deactivations": failed}
     except Exception as e:
-        logger.error(f"❌ Erro ao processar arquivo NC {xml_file_path}: {str(e)}")
-        return {
-            "status": "error",
-            "message": str(e),
-            "deactivated_invoices": [],
-            "failed_deactivations": []
-        }
-def insert_opengcs_to_supabase(opengcs_data: dict, xml_file_path: str) -> bool:
-    """Insere dados OpenGCs no Supabase"""
+        logger.error(f"❌ Erro NC: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+def insert_opengcs_to_db(opengcs_data: dict, xml_file_path: str) -> bool:
+    """Insere dados OpenGCs no PostgreSQL"""
     try:
-        if not opengcs_data:
-            logger.warning("⚠️ Nenhum dado OpenGCs para inserir")
-            return False
-        
-        # Extrair NIF e filial do nome do arquivo
         filename = os.path.basename(xml_file_path)
         nif = extract_nif_from_filename(filename)
         filial = extract_opengcs_filial_from_filename(filename)
         
-
         if not nif:
-            logger.error(f"❌ Não foi possível extrair NIF do arquivo: {filename}")
             return False
         
-        logger.info(f"🏪 Inserindo dados OpenGCs para NIF: {nif}, filial: {filial}")
+        loja_id = f"{nif}_{filial}" if filial else nif
+        session = Session()
         
-        # Verificar se já existe um registro com este NIF e filial
-        existing_record = supabase.table("open_gcs_json").select("loja_id").eq("nif", nif).eq("filial", filial).execute()
+        tbl = table("open_gcs_json", column("loja_id"), column("nif"), column("filial"), column("data", JSON), column("updated_at"))
+        insert_stmt = pg_insert(tbl).values(
+            loja_id=loja_id,
+            nif=nif,
+            filial=filial,
+            data=opengcs_data,
+            updated_at=datetime.now(tz=pytz.timezone('Europe/Lisbon'))
+        )
         
-        if existing_record.data:
-            # Atualizar registro existente
-            loja_id = existing_record.data[0]["loja_id"]
-            logger.info(f"🔄 Atualizando registro existente com loja_id: {loja_id}")
-            
-            response = supabase.table("open_gcs_json").update({
-                "data": opengcs_data,
-                "updated_at": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat()
-            }).eq("loja_id", loja_id).execute()
-            
-            if response.data:
-                logger.info(f"✅ Dados OpenGCs atualizados para NIF: {nif}, filial: {filial}")
-                return True
-            else:
-                logger.warning("⚠️ Falha ao atualizar dados OpenGCs")
-                return False
-        else:
-            # Inserir novo registro
-            logger.info(f"🆕 Inserindo novo registro para NIF: {nif}, filial: {filial}")
-            
-            # Gerar loja_id único (usar NIF + filial como identificador)
-            loja_id = f"{nif}_{filial}" if filial else nif
-            
-            data_to_insert = {
-                "loja_id": loja_id,
-                "nif": nif,
-                "filial": filial,
-                "data": opengcs_data,
-                "updated_at": datetime.now(tz=pytz.timezone('Europe/Lisbon')).isoformat()
-            }
-            
-            response = supabase.table("open_gcs_json").insert(data_to_insert).execute()
-            
-            if response.data:
-                logger.info(f"✅ Dados OpenGCs inseridos para NIF: {nif}, filial: {filial}")
-                return True
-            else:
-                logger.warning("⚠️ Nenhum dado OpenGCs foi inserido")
-                return False
-            
+        upsert_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=['loja_id'],
+            set_={'data': opengcs_data, 'updated_at': datetime.now(tz=pytz.timezone('Europe/Lisbon'))}
+        )
+        
+        session.execute(upsert_stmt)
+        session.commit()
+        logger.info(f"✅ Dados OpenGCs inseridos: {loja_id}")
+        return True
     except Exception as e:
-        logger.error(f"❌ Erro ao inserir dados OpenGCs: {str(e)}")
+        logger.error(f"❌ Erro OpenGCs: {str(e)}")
         return False
+    finally:
+        Session.remove()
