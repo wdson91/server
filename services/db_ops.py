@@ -5,9 +5,18 @@ import re
 from pathlib import Path
 from datetime import datetime
 import pytz
-from sqlalchemy import text, insert, table, column, JSON
+from sqlalchemy import text, insert, table, column, JSON, MetaData
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from utils.db import engine, Session
+
+# Global metadata object for lazy reflection
+db_metadata = MetaData()
+
+def get_table(table_name):
+    """Reflects and returns a table dynamically to avoid hardcoding columns."""
+    if table_name not in db_metadata.tables:
+        db_metadata.reflect(bind=engine, only=[table_name])
+    return db_metadata.tables[table_name]
 
 from utils.xml_parser import (
     extract_references_from_nc_xml,
@@ -24,15 +33,19 @@ def insert_companies_batch(companies_data):
     
     try:
         session = Session()
-        stmt = pg_insert(text("companies"))
+        tbl = get_table("companies")
+        valid_cols = tbl.columns.keys()
         
-        # O Prisma define company_id como chave primária
-        tbl = table("companies", column("company_id"), column("nome"), column("nif"), column("morada"), column("cp"), column("cidade"))
         for company in companies_data:
-            insert_stmt = pg_insert(tbl).values(**company)
+            # Serializar dicionários/listas para JSON string se necessário
+            filtered_company = {
+                k: (json.dumps(v) if isinstance(v, (dict, list)) else v) 
+                for k, v in company.items() if k in valid_cols
+            }
+            insert_stmt = pg_insert(tbl).values(**filtered_company)
             upsert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['company_id'],
-                set_={k: v for k, v in company.items() if k != 'company_id'}
+                set_={k: v for k, v in filtered_company.items() if k != 'company_id'}
             )
             session.execute(upsert_stmt)
         
@@ -58,12 +71,19 @@ def insert_filiais_batch(filiais_data):
             if not filial.get("nome"):
                 filial["nome"] = "Filial sem nome"
             
-            tbl = table("filiais", column("filial_number"), column("nome"), column("company_id"))
-            insert_stmt = pg_insert(tbl).values(**filial)
+            tbl = get_table("filiais")
+            valid_cols = tbl.columns.keys()
+            # Serializar dicionários/listas para JSON string se necessário
+            filtered_filial = {
+                k: (json.dumps(v) if isinstance(v, (dict, list)) else v) 
+                for k, v in filial.items() if k in valid_cols
+            }
+            
+            insert_stmt = pg_insert(tbl).values(**filtered_filial)
             # O Prisma define filial_number como único
             upsert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['filial_number'],
-                set_={k: v for k, v in filial.items() if k != 'filial_number'}
+                set_={k: v for k, v in filtered_filial.items() if k != 'filial_number'}
             )
             session.execute(upsert_stmt)
             
@@ -86,16 +106,19 @@ def insert_invoices_batch(invoices_data):
         session = Session()
         results = []
         for invoice in invoices_data:
-            tbl = table("invoices", 
-                        column("invoice_no"), column("company_id"), column("filial_number"),
-                        column("invoice_date"), column("customer_id"), column("tax_payable"),
-                        column("net_total"), column("gross_total"), column("active"),
-                        column("language"))
-            insert_stmt = pg_insert(tbl).values(**invoice)
+            tbl = get_table("invoices")
+            valid_cols = tbl.columns.keys()
+            # Serializar dicionários/listas para JSON string se necessário
+            filtered_invoice = {
+                k: (json.dumps(v) if isinstance(v, (dict, list)) else v) 
+                for k, v in invoice.items() if k in valid_cols
+            }
+            
+            insert_stmt = pg_insert(tbl).values(**filtered_invoice)
             # O Prisma define @@unique([invoice_no, company_id])
             upsert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=['invoice_no', 'company_id'],
-                set_={k: v for k, v in invoice.items() if k not in ['invoice_no', 'company_id']}
+                set_={k: v for k, v in filtered_invoice.items() if k not in ['invoice_no', 'company_id']}
             ).returning(text("id"), text("invoice_no"), text("company_id"))
             
             res = session.execute(upsert_stmt).fetchone()
@@ -279,7 +302,7 @@ def insert_opengcs_to_db(opengcs_data: dict, xml_file_path: str) -> bool:
         loja_id = f"{nif}_{filial}" if filial else nif
         session = Session()
         
-        tbl = table("open_gcs_json", column("loja_id"), column("nif"), column("filial"), column("data", JSON), column("updated_at"))
+        tbl = get_table("open_gcs_json")
         insert_stmt = pg_insert(tbl).values(
             loja_id=loja_id,
             nif=nif,
