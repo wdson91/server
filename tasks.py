@@ -4,7 +4,13 @@ import logging
 from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'celery'))
 from celery_config import celery_app
-from sftp_connection import download_files_from_sftp, delete_file_from_sftp, connect_sftp, download_opengcs_files_from_sftp, delete_opengcs_file_from_sftp
+from sftp_connection import (
+    download_files_from_sftp, 
+    move_file_to_processed_on_sftp, 
+    connect_sftp, 
+    download_opengcs_files_from_sftp, 
+    move_opengcs_file_to_processed_on_sftp
+)
 from sftp_upload import upload_xml_to_sftp
 from celery import chain
 
@@ -65,17 +71,17 @@ def process_single_opengcs_file(xml_file_path: str):
             insertion_success = insert_opengcs_to_db(json_data, xml_file_path)
             
             if insertion_success:
-                # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
-                # logger.info(f"🗑️ Excluindo arquivo OpenGCs do SFTP após processamento bem-sucedido: {xml_file_path}")
-                # sftp_deleted = delete_opengcs_file_from_sftp(xml_file_path)
+                # Mover arquivo do SFTP para a pasta /processados apenas se a inserção foi bem-sucedida
+                logger.info(f"📦 Arquivando arquivo OpenGCs no SFTP: {xml_file_path}")
+                sftp_moved = move_opengcs_file_to_processed_on_sftp(xml_file_path)
                 
-                # if sftp_deleted:
-                #     logger.info(f"✅ Arquivo OpenGCs excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
-                # else:
-                #     logger.warning(f"⚠️ Falha ao excluir arquivo OpenGCs do SFTP: {os.path.basename(xml_file_path)}")
+                if sftp_moved:
+                    logger.info(f"✅ Arquivo OpenGCs arquivado no SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                else:
+                    logger.warning(f"⚠️ Falha ao arquivar arquivo OpenGCs no SFTP: {os.path.basename(xml_file_path)}")
                 
                 # Remover arquivo local após processamento bem-sucedido
-               # remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
+                remove_file_safely(xml_file_path, "Arquivo OpenGCs XML")
                 
                 logger.info(f"✅ Arquivo OpenGCs processado com sucesso: {xml_file_path}")
                 return {
@@ -178,15 +184,15 @@ def process_single_xml_file(xml_file_path: str):
                 insertion_success = process_and_insert_invoice_batch(json_data)
                 
                 if insertion_success and nc_result["status"] in ["success", "warning"]:
-                    # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida E o processamento de referências foi OK
-                    # logger.info(f"🗑️ Excluindo arquivo NC do SFTP após processamento bem-sucedido: {xml_file_path}")
+                    # Mover arquivo do SFTP apenas se a inserção foi bem-sucedida E o processamento de referências foi OK
+                    logger.info(f"📦 Arquivando arquivo NC no SFTP: {xml_file_path}")
                 
-                    # sftp_deleted = delete_file_from_sftp(xml_file_path)
+                    sftp_moved = move_file_to_processed_on_sftp(xml_file_path)
                     
-                    # if sftp_deleted:
-                    #     logger.info(f"✅ Arquivo NC excluído do SFTP com sucesso: {filename}")
-                    # else:
-                    #     logger.warning(f"⚠️ Falha ao excluir arquivo NC do SFTP: {filename}")
+                    if sftp_moved:
+                        logger.info(f"✅ Arquivo NC arquivado no SFTP com sucesso: {filename}")
+                    else:
+                        logger.warning(f"⚠️ Falha ao arquivar arquivo NC no SFTP: {filename}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo NC XML")
@@ -260,16 +266,15 @@ def process_single_xml_file(xml_file_path: str):
                 insertion_success = process_and_insert_invoice_batch(json_data)
                 
                 if insertion_success:
-                    # Excluir arquivo do SFTP apenas se a inserção foi bem-sucedida
-                    # logger.info(f"🗑️ Excluindo arquivo do SFTP após processamento bem-sucedido: {xml_file_path}")
+                    # Mover arquivo do SFTP apenas se a inserção foi bem-sucedida
+                    logger.info(f"📦 Arquivando arquivo no SFTP: {xml_file_path}")
                 
-                
-                    # sftp_deleted = delete_file_from_sftp(xml_file_path)
+                    sftp_moved = move_file_to_processed_on_sftp(xml_file_path)
                     
-                    # if sftp_deleted:
-                    #      logger.info(f"✅ Arquivo excluído do SFTP com sucesso: {os.path.basename(xml_file_path)}")
-                    # else:
-                    #      logger.warning(f"⚠️ Falha ao excluir arquivo do SFTP: {os.path.basename(xml_file_path)}")
+                    if sftp_moved:
+                         logger.info(f"✅ Arquivo arquivado no SFTP com sucesso: {os.path.basename(xml_file_path)}")
+                    else:
+                         logger.warning(f"⚠️ Falha ao arquivar arquivo no SFTP: {os.path.basename(xml_file_path)}")
                     
                     # Remover arquivos locais após processamento bem-sucedido
                     remove_file_safely(xml_file_path, "Arquivo XML")

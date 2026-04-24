@@ -95,12 +95,6 @@ def download_files_from_sftp():
 
         logger.info(f"✅ Download concluído! {len(downloaded_files)} arquivos baixados")
         
-        # Salvar mapeamento em arquivo temporário para uso posterior
-        import json
-        mappings_file = os.path.join(pasta_local, 'file_mappings.json')
-        with open(mappings_file, 'w') as f:
-            json.dump(file_mappings, f)
-        
         return downloaded_files
         
     except Exception as e:
@@ -113,64 +107,64 @@ def download_files_from_sftp():
         if transport:
             transport.close()
 
-def delete_file_from_sftp(local_file_path):
-    """Exclui arquivo do SFTP após processamento bem-sucedido"""
+def ensure_remote_dir(sftp, remote_dir):
+    """Garante que um diretório existe no SFTP"""
     try:
-        # Carregar mapeamento de arquivos
-        mappings_file = os.path.join('./downloads', 'file_mappings.json')
-        if not os.path.exists(mappings_file):
-            logger.warning(f"⚠️ Arquivo de mapeamento não encontrado: {mappings_file}")
+        sftp.stat(remote_dir)
+    except IOError:
+        # Se não existir, criar (pode falhar se o pai não existir, mas aqui o pai é o NIF que já existe)
+        try:
+            sftp.mkdir(remote_dir)
+            logger.info(f"📁 Diretório criado no SFTP: {remote_dir}")
+        except Exception as e:
+            logger.error(f"❌ Erro ao criar diretório {remote_dir}: {str(e)}")
+
+def move_file_to_processed_on_sftp(local_file_path):
+    """Move arquivo do SFTP para a pasta /processados após processamento bem-sucedido"""
+    try:
+        basename = os.path.basename(local_file_path)
+        
+        # O nome local seguro é formato: NIF_filename.xml
+        if "_" not in basename:
+            logger.error(f"❌ Nome de arquivo local inválido para reconstruir caminho: {basename}")
             return False
-        
-        with open(mappings_file, 'r') as f:
-            file_mappings = json.load(f)
-        
-        # Encontrar mapeamento para o arquivo local
-        file_mapping = None
-        for mapping in file_mappings:
-            if mapping['local_path'] == local_file_path:
-                file_mapping = mapping
-                break
-        
-        if not file_mapping:
-            logger.warning(f"⚠️ Mapeamento não encontrado para: {local_file_path}")
-            return False
+            
+        nif_folder, filename = basename.split('_', 1)
         
         # Conectar ao SFTP
         sftp, transport = connect_sftp()
         if sftp is None:
-            logger.error("❌ Não foi possível conectar ao SFTP para exclusão")
+            logger.error("❌ Não foi possível conectar ao SFTP para movimentação")
             return False
         
         try:
-            # Excluir arquivo remoto
-            remote_path = file_mapping['remote_path']
-            logger.info(f"🗑️ Excluindo arquivo do SFTP: {file_mapping['filename']} da pasta {file_mapping['nif_folder']}")
+            # Reconstruir caminhos remotos
+            pasta_remota = '/home/mydreami/myDream'
+            remote_base_dir = f"{pasta_remota}/{nif_folder}"
+            remote_path = f"{remote_base_dir}/{filename}"
+            processed_dir = f"{remote_base_dir}/processados"
+            new_remote_path = f"{processed_dir}/{filename}"
             
-            sftp.remove(remote_path)
-            logger.info(f"✅ Arquivo excluído com sucesso do SFTP: {file_mapping['filename']}")
+            # Garantir que a pasta processados existe
+            ensure_remote_dir(sftp, processed_dir)
             
-            # Remover mapeamento da lista
-            file_mappings.remove(file_mapping)
+            logger.info(f"📦 Movendo arquivo no SFTP: {filename} para {processed_dir}")
             
-            # Atualizar arquivo de mapeamento
-            with open(mappings_file, 'w') as f:
-                json.dump(file_mappings, f)
+            # Mover arquivo remoto
+            sftp.rename(remote_path, new_remote_path)
+            logger.info(f"✅ Arquivo movido com sucesso no SFTP: {filename}")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro ao excluir arquivo do SFTP: {str(e)}")
+            logger.error(f"❌ Erro ao mover arquivo no SFTP: {str(e)}")
             return False
         finally:
-            # Fechar conexão
-            if sftp:
-                sftp.close()
-            if transport:
-                transport.close()
+            if sftp: sftp.close()
+            if transport: transport.close()
                 
     except Exception as e:
-        logger.error(f"❌ Erro geral na exclusão SFTP: {str(e)}")
+        logger.error(f"❌ Erro geral na movimentação SFTP: {str(e)}")
         return False
 
 if __name__ == "__main__":
@@ -236,12 +230,6 @@ def download_opengcs_files_from_sftp():
 
         logger.info(f"✅ Download OpenGCs concluído! {len(downloaded_files)} arquivos baixados")
         
-        # Salvar mapeamento em arquivo temporário para uso posterior
-        import json
-        mappings_file = os.path.join(pasta_local, 'opengcs_file_mappings.json')
-        with open(mappings_file, 'w') as f:
-            json.dump(file_mappings, f)
-        
         return downloaded_files
         
     except Exception as e:
@@ -254,62 +242,50 @@ def download_opengcs_files_from_sftp():
         if transport:
             transport.close()
 
-def delete_opengcs_file_from_sftp(local_file_path):
-    """Exclui arquivo OpenGCs do SFTP após processamento bem-sucedido"""
+from utils.xml_parser import extract_nif_from_filename
+
+def move_opengcs_file_to_processed_on_sftp(local_file_path):
+    """Move arquivo OpenGCs do SFTP para a pasta /processados após processamento bem-sucedido"""
     try:
-        # Carregar mapeamento de arquivos
-        mappings_file = os.path.join('./downloads', 'opengcs_file_mappings.json')
-        if not os.path.exists(mappings_file):
-            logger.warning(f"⚠️ Arquivo de mapeamento OpenGCs não encontrado: {mappings_file}")
+        basename = os.path.basename(local_file_path)
+        nif_folder = extract_nif_from_filename(basename)
+        
+        if not nif_folder:
+            logger.error(f"❌ Não foi possível extrair NIF do arquivo: {basename}")
             return False
-        
-        with open(mappings_file, 'r') as f:
-            file_mappings = json.load(f)
-        
-        # Encontrar mapeamento para o arquivo local
-        file_mapping = None
-        for mapping in file_mappings:
-            if mapping['local_path'] == local_file_path:
-                file_mapping = mapping
-                break
-        
-        if not file_mapping:
-            logger.warning(f"⚠️ Mapeamento não encontrado para: {local_file_path}")
-            return False
-        
+            
         # Conectar ao SFTP
         sftp, transport = connect_sftp()
         if sftp is None:
-            logger.error("❌ Não foi possível conectar ao SFTP para exclusão")
+            logger.error("❌ Não foi possível conectar ao SFTP para movimentação OpenGCs")
             return False
         
         try:
-            # Excluir arquivo remoto
-            remote_path = file_mapping['remote_path']
-            logger.info(f"🗑️ Excluindo arquivo OpenGCs do SFTP: {file_mapping['filename']} da pasta {file_mapping['nif_folder']}")
+            # Reconstruir caminhos remotos
+            pasta_remota = '/home/mydreami/myDream'
+            remote_base_dir = f"{pasta_remota}/{nif_folder}"
+            remote_path = f"{remote_base_dir}/{basename}"
+            processed_dir = f"{remote_base_dir}/processados"
+            new_remote_path = f"{processed_dir}/{basename}"
             
-            sftp.remove(remote_path)
-            logger.info(f"✅ Arquivo OpenGCs excluído com sucesso do SFTP: {file_mapping['filename']}")
+            # Garantir que a pasta processados existe
+            ensure_remote_dir(sftp, processed_dir)
             
-            # Remover mapeamento da lista
-            file_mappings.remove(file_mapping)
+            logger.info(f"📦 Movendo arquivo OpenGCs no SFTP: {basename} para {processed_dir}")
             
-            # Atualizar arquivo de mapeamento
-            with open(mappings_file, 'w') as f:
-                json.dump(file_mappings, f)
+            # Mover arquivo remoto
+            sftp.rename(remote_path, new_remote_path)
+            logger.info(f"✅ Arquivo OpenGCs movido com sucesso no SFTP: {basename}")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌ Erro ao excluir arquivo OpenGCs do SFTP: {str(e)}")
+            logger.error(f"❌ Erro ao mover arquivo OpenGCs no SFTP: {str(e)}")
             return False
         finally:
-            # Fechar conexão
-            if sftp:
-                sftp.close()
-            if transport:
-                transport.close()
+            if sftp: sftp.close()
+            if transport: transport.close()
                 
     except Exception as e:
-        logger.error(f"❌ Erro geral na exclusão SFTP OpenGCs: {str(e)}")
+        logger.error(f"❌ Erro geral na movimentação SFTP OpenGCs: {str(e)}")
         return False
